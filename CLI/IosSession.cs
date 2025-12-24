@@ -10,6 +10,7 @@ public enum IosMode
     InterfaceConfig,
     DhcpPoolConfig,
     AclConfig,
+    RouterOspfConfig,
     LineConsoleConfig
 }
 
@@ -20,6 +21,7 @@ public class IosSession : ITerminalSession
 
     private DhcpPool _currentPool;
     private ExtendedAcl _currentAcl;
+    private int _currentOspfPid = -1;
 
     public string Hostname { get; private set; } = "Router";
     public IosMode Mode { get; private set; } = IosMode.UserExec;
@@ -53,6 +55,7 @@ public class IosSession : ITerminalSession
                 IosMode.InterfaceConfig => $"{Hostname}(config-if)#",
                 IosMode.DhcpPoolConfig => $"{Hostname}(dhcp-config)#",
                 IosMode.AclConfig => $"{Hostname}(config-ext-nacl)#",
+                IosMode.RouterOspfConfig => $"{Hostname}(config-router)#",
                 IosMode.LineConsoleConfig => $"{Hostname}(config-line)#",
                 _ => $"{Hostname}>"
             };
@@ -270,7 +273,7 @@ public class IosSession : ITerminalSession
             return removed ? "" : "% Route not found.";
         }
 
-if (Mode == IosMode.GlobalConfig && input.StartsWith("ip dhcp pool ", StringComparison.OrdinalIgnoreCase))
+        if (Mode == IosMode.GlobalConfig && input.StartsWith("ip dhcp pool ", StringComparison.OrdinalIgnoreCase))
         {
             if (_router == null) return "% Device not ready.";
             string name = input.Substring("ip dhcp pool ".Length).Trim();
@@ -280,6 +283,30 @@ if (Mode == IosMode.GlobalConfig && input.StartsWith("ip dhcp pool ", StringComp
             Mode = IosMode.DhcpPoolConfig;
             return "";
         }
+
+        if (Mode == IosMode.GlobalConfig && input.StartsWith("router ospf ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            var parts = input.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 3) return "% Incomplete command.";
+            if (!int.TryParse(parts[2], out int pid) || pid <= 0) return "% Invalid input detected at '^' marker.";
+            _router.OspfEnsureProcess(pid);
+            _currentOspfPid = pid;
+            Mode = IosMode.RouterOspfConfig;
+            return "";
+        }
+
+        if (Mode == IosMode.GlobalConfig && input.StartsWith("no router ospf ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            var parts = input.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 4) return "% Incomplete command.";
+            if (!int.TryParse(parts[3], out int pid) || pid <= 0) return "% Invalid input detected at '^' marker.";
+            _router.OspfRemoveProcess(pid);
+            if (_currentOspfPid == pid) _currentOspfPid = -1;
+            return "";
+        }
+
 
         if (Mode == IosMode.GlobalConfig && input.StartsWith("no ip dhcp pool ", StringComparison.OrdinalIgnoreCase))
         {
@@ -483,7 +510,58 @@ if (Mode == IosMode.GlobalConfig && input.StartsWith("ip dhcp pool ", StringComp
                 return "";
             }}
 
-        if (Mode == IosMode.InterfaceConfig)
+        
+        if (Mode == IosMode.RouterOspfConfig)
+        {
+            if (_router == null) return "% Device not ready.";
+            if (_currentOspfPid <= 0) return "% Invalid input detected at '^' marker.";
+
+            if (input.Equals("exit", StringComparison.OrdinalIgnoreCase))
+            {
+                Mode = IosMode.GlobalConfig;
+                return "";
+            }
+
+            if (input.StartsWith("network ", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = input.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 5) return "% Incomplete command.";
+                                string net = parts[1];
+                string wc = parts[2];
+
+                int areaIdx = -1;
+                for (int i = 0; i < parts.Length; i++)
+                    if (parts[i].Equals("area", StringComparison.OrdinalIgnoreCase))
+                        areaIdx = i;
+
+                if (areaIdx < 0 || areaIdx + 1 >= parts.Length) return "% Incomplete command.";
+                if (!int.TryParse(parts[areaIdx + 1], out int area)) return "% Invalid input detected at '^' marker.";
+                if (area != 0) return "% Only area 0 is supported.";
+
+                bool ok = _router.OspfAddNetwork(_currentOspfPid, net, wc, area);
+                return ok ? "" : "% Invalid input detected at '^' marker.";
+            }
+
+            if (input.StartsWith("passive-interface ", StringComparison.OrdinalIgnoreCase))
+            {
+                string ifName = input.Substring("passive-interface ".Length).Trim();
+                if (ifName.Length == 0) return "% Incomplete command.";
+                _router.OspfSetPassive(_currentOspfPid, ifName, true);
+                return "";
+            }
+
+            if (input.StartsWith("no passive-interface ", StringComparison.OrdinalIgnoreCase))
+            {
+                string ifName = input.Substring("no passive-interface ".Length).Trim();
+                if (ifName.Length == 0) return "% Incomplete command.";
+                _router.OspfSetPassive(_currentOspfPid, ifName, false);
+                return "";
+            }
+
+            return "% Invalid input detected at '^' marker.";
+        }
+
+if (Mode == IosMode.InterfaceConfig)
         {
             if (_currentIf == null)
                 return "% No interface selected.";
@@ -630,6 +708,21 @@ if (Mode == IosMode.GlobalConfig && input.StartsWith("ip dhcp pool ", StringComp
             if (_router == null) return "% Device not ready.";
             return _router.BuildShowIpRoute();
         }
+
+        if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
+            input.Equals("show ip ospf neighbor", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            return _router.BuildShowIpOspfNeighbor();
+        }
+
+        if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
+            input.Equals("show ip protocols", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            return _router.BuildShowIpProtocols();
+        }
+
 
         if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
             input.Equals("show access-lists", StringComparison.OrdinalIgnoreCase))

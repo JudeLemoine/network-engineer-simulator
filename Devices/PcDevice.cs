@@ -33,9 +33,9 @@ public class PcDevice : Device
 
     [NonSerialized] private Dictionary<string, ArpEntry> _arp = new Dictionary<string, ArpEntry>(StringComparer.OrdinalIgnoreCase);
 
-    private void Awake()
+    protected override void Awake()
     {
-
+        base.Awake();
         if (string.IsNullOrWhiteSpace(macAddress) && !string.IsNullOrWhiteSpace(pseudoMac))
             macAddress = pseudoMac;
 
@@ -106,7 +106,7 @@ public class PcDevice : Device
 
             if (p.medium == PortMedium.Ethernet)
             {
-                if (p.IsConnected) return p;
+                if (p.IsConnected) return p;      // best case
                 if (anyEthernet == null) anyEthernet = p;
             }
             else if (p.medium == PortMedium.Wireless)

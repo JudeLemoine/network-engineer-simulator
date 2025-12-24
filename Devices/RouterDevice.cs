@@ -223,6 +223,37 @@ public class RouterDevice : Device
     public List<StaticRoute> staticRoutes = new List<StaticRoute>();
 
     [System.Serializable]
+    public class OspfNetworkStatement
+    {
+        public string network = "";
+        public string wildcard = "";
+        public int area = 0;
+    }
+
+    [System.Serializable]
+    public class OspfProcessConfig
+    {
+        public int pid = 1;
+        public List<OspfNetworkStatement> networks = new List<OspfNetworkStatement>();
+        public List<string> passiveInterfaces = new List<string>();
+    }
+
+    public List<OspfProcessConfig> ospfProcesses = new List<OspfProcessConfig>();
+
+    class OspfRouteEntry
+    {
+        public uint network;
+        public uint mask;
+        public string nextHopIp;
+        public string outIf;
+        public int cost;
+        public int pid;
+    }
+
+    List<OspfRouteEntry> _ospfRoutes = new List<OspfRouteEntry>();
+
+
+    [System.Serializable]
     public class InterfaceAclBinding
     {
         public string interfaceName;
@@ -1472,6 +1503,325 @@ public class RouterDevice : Device
 
         return false;
     }
+    public void OspfEnsureProcess(int pid)
+    {
+        if (pid <= 0) return;
+        if (ospfProcesses == null) ospfProcesses = new List<OspfProcessConfig>();
+        foreach (var p in ospfProcesses)
+            if (p != null && p.pid == pid)
+                return;
+        ospfProcesses.Add(new OspfProcessConfig { pid = pid });
+    }
+
+    public void OspfRemoveProcess(int pid)
+    {
+        if (ospfProcesses == null) return;
+        ospfProcesses.RemoveAll(p => p == null || p.pid == pid);
+    }
+
+    OspfProcessConfig GetOspfProcess(int pid)
+    {
+        if (ospfProcesses == null) return null;
+        foreach (var p in ospfProcesses)
+            if (p != null && p.pid == pid)
+                return p;
+        return null;
+    }
+
+    bool InterfaceMatchesAnyOspf(RouterInterface itf, out int pid, out bool passive)
+    {
+        pid = -1;
+        passive = false;
+        if (itf == null) return false;
+        if (!TryParseIPv4(itf.ipAddress, out uint ip)) return false;
+        if (!TryParseIPv4(itf.subnetMask, out uint _)) return false;
+        if (ospfProcesses == null) return false;
+
+        foreach (var p in ospfProcesses)
+        {
+            if (p == null) continue;
+            bool match = false;
+            if (p.networks != null)
+            {
+                foreach (var ns in p.networks)
+                {
+                    if (ns == null) continue;
+                    if (ns.area != 0) continue;
+                    if (!TryParseIPv4(ns.network, out uint net)) continue;
+                    if (!TryParseIPv4(ns.wildcard, out uint wc)) continue;
+                    uint m = ~wc;
+                    if ((ip & m) == (net & m)) { match = true; break; }
+                }
+            }
+            if (!match) continue;
+
+            pid = p.pid;
+            passive = false;
+            if (p.passiveInterfaces != null)
+            {
+                foreach (var pi in p.passiveInterfaces)
+                {
+                    if (string.IsNullOrWhiteSpace(pi)) continue;
+                    if (string.Equals(NormalizeInterfaceName(pi), NormalizeInterfaceName(itf.name), StringComparison.OrdinalIgnoreCase))
+                    {
+                        passive = true;
+                        break;
+                    }
+                }
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    public bool OspfAddNetwork(int pid, string network, string wildcard, int area)
+    {
+        if (pid <= 0) return false;
+        if (area != 0) return false;
+        network = (network ?? "").Trim();
+        wildcard = (wildcard ?? "").Trim();
+        if (!TryParseIPv4(network, out _)) return false;
+        if (!TryParseIPv4(wildcard, out _)) return false;
+
+        OspfEnsureProcess(pid);
+        var p = GetOspfProcess(pid);
+        if (p == null) return false;
+        if (p.networks == null) p.networks = new List<OspfNetworkStatement>();
+
+        foreach (var ns in p.networks)
+        {
+            if (ns == null) continue;
+            if (string.Equals(ns.network, network, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(ns.wildcard, wildcard, StringComparison.OrdinalIgnoreCase) &&
+                ns.area == area)
+                return true;
+        }
+
+        p.networks.Add(new OspfNetworkStatement { network = network, wildcard = wildcard, area = area });
+        return true;
+    }
+
+    public void OspfSetPassive(int pid, string ifName, bool passive)
+    {
+        var p = GetOspfProcess(pid);
+        if (p == null) return;
+        if (p.passiveInterfaces == null) p.passiveInterfaces = new List<string>();
+        string norm = NormalizeInterfaceName(ifName);
+        p.passiveInterfaces.RemoveAll(x => string.Equals(NormalizeInterfaceName(x), norm, StringComparison.OrdinalIgnoreCase));
+        if (passive) p.passiveInterfaces.Add(norm);
+    }
+
+    void RecomputeOspfRoutes()
+    {
+        _ospfRoutes.Clear();
+        if (ospfProcesses == null || ospfProcesses.Count == 0) return;
+
+        RefreshProtocolStates();
+
+        var routers = UnityEngine.Object.FindObjectsOfType<RouterDevice>(true);
+        if (routers == null || routers.Length == 0) return;
+
+        var myId = GetInstanceID();
+
+        var enabledIfs = new List<RouterInterface>();
+        foreach (var itf in interfaces)
+        {
+            if (itf == null) continue;
+            if (!itf.protocolUp) continue;
+            if (!InterfaceMatchesAnyOspf(itf, out _, out bool _)) continue;
+            enabledIfs.Add(itf);
+        }
+
+        var adj = new Dictionary<int, List<(int nid, string outIf, string nhIp)>>();
+        foreach (var r in routers)
+        {
+            if (r == null) continue;
+            adj[r.GetInstanceID()] = new List<(int, string, string)>();
+        }
+
+        foreach (var a in routers)
+        {
+            if (a == null) continue;
+            foreach (var ai in a.interfaces)
+            {
+                if (ai == null) continue;
+                if (!ai.protocolUp) continue;
+                if (!a.InterfaceMatchesAnyOspf(ai, out _, out bool aPassive)) continue;
+                if (aPassive) continue;
+                if (!TryParseIPv4(ai.ipAddress, out uint aIp)) continue;
+                if (!TryParseIPv4(ai.subnetMask, out uint aMask)) continue;
+
+                foreach (var b in routers)
+                {
+                    if (b == null || b == a) continue;
+                    foreach (var bi in b.interfaces)
+                    {
+                        if (bi == null) continue;
+                        if (!bi.protocolUp) continue;
+                        if (!b.InterfaceMatchesAnyOspf(bi, out _, out bool bPassive)) continue;
+                        if (bPassive) continue;
+                        if (!TryParseIPv4(bi.ipAddress, out uint bIp)) continue;
+                        if (!TryParseIPv4(bi.subnetMask, out uint bMask)) continue;
+                        if (aMask != bMask) continue;
+                        if ((aIp & aMask) != (bIp & bMask)) continue;
+
+                        adj[a.GetInstanceID()].Add((b.GetInstanceID(), ai.name, bi.ipAddress));
+                    }
+                }
+            }
+        }
+
+        var dist = new Dictionary<int, int>();
+        var firstHop = new Dictionary<int, (string outIf, string nhIp)>();
+        var q = new Queue<int>();
+
+        dist[myId] = 0;
+        q.Enqueue(myId);
+
+        while (q.Count > 0)
+        {
+            int cur = q.Dequeue();
+            int cd = dist[cur];
+            if (!adj.TryGetValue(cur, out var nbs)) continue;
+            foreach (var nb in nbs)
+            {
+                int nid = nb.nid;
+                if (dist.ContainsKey(nid)) continue;
+                dist[nid] = cd + 1;
+
+                if (cur == myId)
+                    firstHop[nid] = (nb.outIf, nb.nhIp);
+                else
+                    firstHop[nid] = firstHop[cur];
+
+                q.Enqueue(nid);
+            }
+        }
+
+        var best = new Dictionary<(uint net, uint mask), OspfRouteEntry>();
+
+        foreach (var r in routers)
+        {
+            if (r == null) continue;
+            int rid = r.GetInstanceID();
+            if (rid != myId && !dist.ContainsKey(rid)) continue;
+
+            foreach (var itf in r.interfaces)
+            {
+                if (itf == null) continue;
+                if (!itf.protocolUp) continue;
+                if (!r.InterfaceMatchesAnyOspf(itf, out int pid, out bool _)) continue;
+                if (!TryParseIPv4(itf.ipAddress, out uint ip)) continue;
+                if (!TryParseIPv4(itf.subnetMask, out uint mask)) continue;
+
+                uint net = ip & mask;
+
+                if (rid == myId) continue;
+
+                bool isConnectedLocal = false;
+                foreach (var li in interfaces)
+                {
+                    if (li == null) continue;
+                    if (!TryParseIPv4(li.ipAddress, out uint lip)) continue;
+                    if (!TryParseIPv4(li.subnetMask, out uint lmask)) continue;
+                    if ((lip & lmask) == net && lmask == mask) { isConnectedLocal = true; break; }
+                }
+                if (isConnectedLocal) continue;
+
+                bool staticOverride = false;
+                if (staticRoutes != null)
+                {
+                    foreach (var sr in staticRoutes)
+                    {
+                        if (sr == null) continue;
+                        if (!TryParseIPv4(sr.network, out uint snet)) continue;
+                        if (!TryParseIPv4(sr.subnetMask, out uint smask)) continue;
+                        if (snet == net && smask == mask) { staticOverride = true; break; }
+                    }
+                }
+                if (staticOverride) continue;
+
+                var hop = firstHop[rid];
+                var entry = new OspfRouteEntry
+                {
+                    network = net,
+                    mask = mask,
+                    nextHopIp = hop.nhIp,
+                    outIf = hop.outIf,
+                    cost = dist[rid],
+                    pid = pid
+                };
+
+                var key = (net, mask);
+                if (!best.TryGetValue(key, out var curBest) || entry.cost < curBest.cost)
+                    best[key] = entry;
+            }
+        }
+
+        foreach (var e in best.Values)
+            _ospfRoutes.Add(e);
+    }
+
+    public string BuildShowIpOspfNeighbor()
+    {
+        RecomputeOspfRoutes();
+
+        var routers = UnityEngine.Object.FindObjectsOfType<RouterDevice>(true);
+        if (routers == null) return "No OSPF neighbors";
+
+        var lines = new List<string>();
+        foreach (var itf in interfaces)
+        {
+            if (itf == null) continue;
+            if (!itf.protocolUp) continue;
+            if (!InterfaceMatchesAnyOspf(itf, out _, out bool passive)) continue;
+            if (passive) continue;
+            if (!TryParseIPv4(itf.ipAddress, out uint ip)) continue;
+            if (!TryParseIPv4(itf.subnetMask, out uint mask)) continue;
+
+            foreach (var r in routers)
+            {
+                if (r == null || r == this) continue;
+                foreach (var ri in r.interfaces)
+                {
+                    if (ri == null) continue;
+                    if (!ri.protocolUp) continue;
+                    if (!r.InterfaceMatchesAnyOspf(ri, out _, out bool rpassive)) continue;
+                    if (rpassive) continue;
+                    if (!TryParseIPv4(ri.ipAddress, out uint rip)) continue;
+                    if (!TryParseIPv4(ri.subnetMask, out uint rmask)) continue;
+                    if (mask != rmask) continue;
+                    if ((ip & mask) != (rip & mask)) continue;
+                    lines.Add($"{NormalizeInterfaceName(itf.name),-22} {r.deviceName,-15} FULL");
+                }
+            }
+        }
+
+        if (lines.Count == 0) return "No OSPF neighbors";
+        return string.Join("\n", lines);
+    }
+
+    public string BuildShowIpProtocols()
+    {
+        if (ospfProcesses == null || ospfProcesses.Count == 0) return "No routing protocols configured";
+        var lines = new List<string>();
+        foreach (var p in ospfProcesses)
+        {
+            if (p == null) continue;
+            lines.Add($"Routing Protocol is \"ospf {p.pid}\"");
+            if (p.networks != null)
+            {
+                foreach (var ns in p.networks)
+                {
+                    if (ns == null) continue;
+                    lines.Add($"  Network {ns.network} {ns.wildcard} area {ns.area}");
+                }
+            }
+        }
+        return string.Join("\n", lines);
+    }
+
 
     public bool TryRoute(uint dstIp, out RouterInterface egress, out string nextHopIp)
     {
@@ -1539,14 +1889,44 @@ public class RouterDevice : Device
             return true;
         }
 
-        return false;
+        
+        RecomputeOspfRoutes();
+        if (_ospfRoutes != null && _ospfRoutes.Count > 0)
+        {
+            int bestP = -1;
+            OspfRouteEntry bestO = null;
+            foreach (var o in _ospfRoutes)
+            {
+                if (o == null) continue;
+                if ((dstIp & o.mask) != (o.network & o.mask)) continue;
+                int pfx = MaskToPrefix(o.mask);
+                if (pfx > bestP)
+                {
+                    bestP = pfx;
+                    bestO = o;
+                }
+            }
+
+            if (bestO != null)
+            {
+                var outIf = GetInterface(bestO.outIf);
+                if (outIf != null && outIf.protocolUp)
+                {
+                    egress = outIf;
+                    nextHopIp = bestO.nextHopIp;
+                    return true;
+                }
+            }
+        }
+
+return false;
     }
 
     public string BuildShowIpRoute()
     {
         RefreshProtocolStates();
 
-        string outp = "Codes: C - connected, S - static, L - local";
+        string outp = "Codes: C - connected, S - static, O - ospf, L - local";
 
         bool hasDefault = false;
         string defaultVia = "";

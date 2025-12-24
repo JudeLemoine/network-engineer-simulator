@@ -18,7 +18,10 @@ public class TerminalScreen : MonoBehaviour
     public TMP_Text inputLineText;
     public ScrollRect outputScroll;
 
-    [Header("Device Link")]
+    
+    public Button pasteButton;
+    public Button copyButton;
+[Header("Device Link")]
     public RouterDevice routerDevice;
     public SwitchDevice switchDevice;
     public PcDevice pcDevice;
@@ -45,6 +48,10 @@ public class TerminalScreen : MonoBehaviour
 
         SetFocused(startFocused);
         ClearScreen();
+
+        if (pasteButton) pasteButton.onClick.AddListener(PasteFromClipboard);
+        if (copyButton) copyButton.onClick.AddListener(CopyAllToClipboard);
+    
     }
 
     private void ResolveOwnerDevice()
@@ -95,7 +102,22 @@ public class TerminalScreen : MonoBehaviour
             return;
         }
 
-        foreach (char c in Input.inputString)
+        
+bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
+
+if (ctrl && Input.GetKeyDown(KeyCode.V))
+{
+    PasteFromClipboard();
+    return;
+}
+
+if (ctrl && Input.GetKeyDown(KeyCode.C))
+{
+    CopyAllToClipboard();
+    return;
+}
+
+foreach (char c in Input.inputString)
         {
             if (c == '\b')
             {
@@ -193,32 +215,84 @@ public class TerminalScreen : MonoBehaviour
         _session = new IosSession(routerDevice);
     }
 
-    private void SubmitLine()
-    {
-        if (_session == null)
-            return;
+    
+public void PasteFromClipboard()
+{
+    if (!_active) return;
+    if (_session == null) return;
+    if (!HasPower()) return;
 
+    string clip = GUIUtility.systemCopyBuffer ?? "";
+    if (string.IsNullOrEmpty(clip)) return;
+
+    if (clip.IndexOf('\n') >= 0 || clip.IndexOf('\r') >= 0)
+    {
+        PasteAndExecute(clip);
+        return;
+    }
+
+    _currentInput += clip;
+    ExitHistoryBrowseIfNeeded();
+    RedrawInputLine();
+    SnapToBottom();
+}
+
+public void CopyAllToClipboard()
+{
+    if (_lineBuffer == null) return;
+    GUIUtility.systemCopyBuffer = string.Join("\n", _lineBuffer);
+}
+
+private void PasteAndExecute(string text)
+{
+    string normalized = text.Replace("\r\n", "\n").Replace("\r", "\n");
+    var lines = normalized.Split('\n');
+    for (int i = 0; i < lines.Length; i++)
+    {
+        string cmd = lines[i].TrimEnd();
+        if (string.IsNullOrWhiteSpace(cmd)) continue;
+        SubmitCommand(cmd);
+    }
+}
+
+private void SubmitCommand(string cmdRaw)
+{
+    if (_session == null) return;
+
+    string cmd = cmdRaw.TrimEnd();
+
+    AppendText($"{_session.Prompt} {cmd}");
+
+    if (!string.IsNullOrWhiteSpace(cmd))
+        AddToHistory(cmd);
+
+    string result = _session.Execute(cmd);
+
+    if (result == "logout")
+    {
+        SetFocused(false);
+        return;
+    }
+
+    if (!string.IsNullOrWhiteSpace(result))
+        AppendText(result);
+
+    _currentInput = "";
+    RedrawInputLine();
+    SnapToBottom();
+}
+
+private void SubmitLine()
+    {
         string cmd = _currentInput.TrimEnd();
         _currentInput = "";
-
-        AppendText($"{_session.Prompt} {cmd}");
-
-        if (!string.IsNullOrWhiteSpace(cmd))
-            AddToHistory(cmd);
-
-        string result = _session.Execute(cmd);
-
-        if (result == "logout")
+        if (string.IsNullOrWhiteSpace(cmd))
         {
-            SetFocused(false);
+            RedrawInputLine();
+            SnapToBottom();
             return;
         }
-
-        if (!string.IsNullOrWhiteSpace(result))
-            AppendText(result);
-
-        RedrawInputLine();
-        SnapToBottom();
+        SubmitCommand(cmd);
     }
 
     private void AddToHistory(string cmd)

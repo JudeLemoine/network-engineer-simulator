@@ -15,6 +15,16 @@ public class RouterInterface
     public bool isSubinterface = false;
     public string parent = "";
     public int dot1qVlan = -1;
+
+[System.Serializable]
+public class StaticRoute
+{
+    public string network;
+    public string subnetMask;
+    public string nextHop;
+    public string exitInterface;
+}
+
 }
 
 [System.Serializable]
@@ -208,6 +218,9 @@ public class RouterDevice : Device
     public List<DhcpPool> dhcpPools = new List<DhcpPool>();
 
     public List<ExtendedAcl> acls = new List<ExtendedAcl>();
+
+
+    public List<StaticRoute> staticRoutes = new List<StaticRoute>();
 
     [System.Serializable]
     public class InterfaceAclBinding
@@ -469,6 +482,11 @@ public class RouterDevice : Device
         if (!p.owner.IsPoweredOn) return false;
         if (!p.connectedTo.owner.IsPoweredOn) return false;
         return true;
+    }
+
+    public Port ResolvePort(string ifName)
+    {
+        return GetPortForInterface(ifName);
     }
 
     public void RefreshProtocolStates()
@@ -1383,7 +1401,241 @@ public class RouterDevice : Device
         return best != null;
     }
 
-    public string GetInterfacePseudoMac(string interfaceName)
+    
+    public bool AddOrUpdateStaticRoute(string network, string mask, string nextHop, string exitIf)
+    {
+        network = (network ?? "").Trim();
+        mask = (mask ?? "").Trim();
+        nextHop = (nextHop ?? "").Trim();
+        exitIf = (exitIf ?? "").Trim();
+
+        if (!TryParseIPv4(network, out _)) return false;
+        if (!TryParseIPv4(mask, out _)) return false;
+
+        bool hasNextHop = nextHop.Length > 0;
+        bool hasExit = exitIf.Length > 0;
+
+        if (!hasNextHop && !hasExit) return false;
+        if (hasNextHop && !TryParseIPv4(nextHop, out _)) return false;
+
+        if (staticRoutes == null) staticRoutes = new List<StaticRoute>();
+
+        string normExit = hasExit ? NormalizeInterfaceName(exitIf) : "";
+        foreach (var r in staticRoutes)
+        {
+            if (r == null) continue;
+            if (string.Equals(r.network, network, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(r.subnetMask, mask, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals((r.exitInterface ?? "").Trim(), normExit, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals((r.nextHop ?? "").Trim(), nextHop, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        staticRoutes.Add(new StaticRoute
+        {
+            network = network,
+            subnetMask = mask,
+            nextHop = hasNextHop ? nextHop : "",
+            exitInterface = normExit
+        });
+
+        return true;
+    }
+
+    public bool RemoveStaticRoute(string network, string mask, string nextHop, string exitIf)
+    {
+        if (staticRoutes == null || staticRoutes.Count == 0) return false;
+
+        network = (network ?? "").Trim();
+        mask = (mask ?? "").Trim();
+        nextHop = (nextHop ?? "").Trim();
+        exitIf = (exitIf ?? "").Trim();
+        string normExit = exitIf.Length > 0 ? NormalizeInterfaceName(exitIf) : "";
+
+        for (int i = staticRoutes.Count - 1; i >= 0; i--)
+        {
+            var r = staticRoutes[i];
+            if (r == null) continue;
+
+            if (!string.Equals((r.network ?? "").Trim(), network, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!string.Equals((r.subnetMask ?? "").Trim(), mask, StringComparison.OrdinalIgnoreCase)) continue;
+
+            bool nextHopMatch = string.Equals((r.nextHop ?? "").Trim(), nextHop, StringComparison.OrdinalIgnoreCase);
+            bool exitMatch = string.Equals((r.exitInterface ?? "").Trim(), normExit, StringComparison.OrdinalIgnoreCase);
+
+            if (nextHopMatch && exitMatch)
+            {
+                staticRoutes.RemoveAt(i);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public bool TryRoute(uint dstIp, out RouterInterface egress, out string nextHopIp)
+    {
+        egress = null;
+        nextHopIp = "";
+
+        if (TryGetBestConnectedInterface(dstIp, out RouterInterface connected))
+        {
+            egress = connected;
+            nextHopIp = ToIPv4(dstIp);
+            return true;
+        }
+
+        if (staticRoutes == null || staticRoutes.Count == 0) return false;
+
+        int bestPrefix = -1;
+        StaticRoute bestRoute = null;
+
+        foreach (var r in staticRoutes)
+        {
+            if (r == null) continue;
+            if (!TryParseIPv4(r.network, out uint net)) continue;
+            if (!TryParseIPv4(r.subnetMask, out uint mask)) continue;
+
+            if ((dstIp & mask) != (net & mask)) continue;
+
+            int prefix = MaskToPrefix(mask);
+            if (prefix > bestPrefix)
+            {
+                bestPrefix = prefix;
+                bestRoute = r;
+            }
+        }
+
+        if (bestRoute == null) return false;
+
+        string exitIf = (bestRoute.exitInterface ?? "").Trim();
+        string nh = (bestRoute.nextHop ?? "").Trim();
+
+        if (exitIf.Length > 0)
+        {
+            egress = GetInterfaceByName(exitIf);
+            if (egress == null) return false;
+            if (!egress.protocolUp) return false;
+
+            if (nh.Length > 0)
+            {
+                nextHopIp = nh;
+                return true;
+            }
+
+            nextHopIp = ToIPv4(dstIp);
+            return true;
+        }
+
+        if (nh.Length > 0)
+        {
+            if (!TryParseIPv4(nh, out uint nhIp)) return false;
+
+            if (!TryGetBestConnectedInterface(nhIp, out RouterInterface outIf))
+                return false;
+
+            egress = outIf;
+            nextHopIp = nh;
+            return true;
+        }
+
+        return false;
+    }
+
+    public string BuildShowIpRoute()
+    {
+        RefreshProtocolStates();
+
+        string outp = "Codes: C - connected, S - static, L - local";
+
+        bool hasDefault = false;
+        string defaultVia = "";
+
+        if (staticRoutes != null)
+        {
+            foreach (var r in staticRoutes)
+            {
+                if (r == null) continue;
+                if (!TryParseIPv4(r.network, out uint net)) continue;
+                if (!TryParseIPv4(r.subnetMask, out uint mask)) continue;
+                if (MaskToPrefix(mask) != 0) continue;
+
+                hasDefault = true;
+                defaultVia = (r.nextHop ?? "").Trim();
+                break;
+            }
+        }
+
+        outp += hasDefault
+            ? $"Gateway of last resort is {defaultVia} to network 0.0.0.0"
+            : "Gateway of last resort is not set";
+
+        var lines = new List<string>();
+
+        foreach (var itf in interfaces)
+        {
+            if (itf == null) continue;
+            if (!itf.protocolUp) continue;
+            if (string.IsNullOrWhiteSpace(itf.ipAddress) || itf.ipAddress == "unassigned") continue;
+            if (string.IsNullOrWhiteSpace(itf.subnetMask)) continue;
+
+            if (!TryParseIPv4(itf.ipAddress, out uint ip)) continue;
+            if (!TryParseIPv4(itf.subnetMask, out uint mask)) continue;
+
+            uint net = ip & mask;
+            int prefix = MaskToPrefix(mask);
+            string netStr = ToIPv4(net);
+
+            lines.Add($"C    {netStr}/{prefix} is directly connected, {itf.name}");
+            lines.Add($"L    {itf.ipAddress}/32 is directly connected, {itf.name}");
+        }
+
+        if (staticRoutes != null)
+        {
+            foreach (var r in staticRoutes)
+            {
+                if (r == null) continue;
+                if (!TryParseIPv4(r.network, out uint net)) continue;
+                if (!TryParseIPv4(r.subnetMask, out uint mask)) continue;
+                int prefix = MaskToPrefix(mask);
+                string netStr = ToIPv4(net & mask);
+
+                string nh = (r.nextHop ?? "").Trim();
+                string exitIf = (r.exitInterface ?? "").Trim();
+
+                if (nh.Length > 0)
+                {
+                    lines.Add($"S    {netStr}/{prefix} [1/0] via {nh}");
+                }
+                else if (exitIf.Length > 0)
+                {
+                    lines.Add($"S    {netStr}/{prefix} is directly connected, {exitIf}");
+                }
+            }
+        }
+
+        lines.Sort(StringComparer.OrdinalIgnoreCase);
+        foreach (var l in lines) outp += l + "";
+        return outp.TrimEnd('\n', '\r');
+    }
+
+    public RouterInterface GetInterfaceByName(string ifName)
+    {
+        ifName = (ifName ?? "").Trim();
+        if (ifName.Length == 0) return null;
+
+        string lookup = NormalizeInterfaceName(ifName);
+        if (interfaces == null) return null;
+        foreach (var i in interfaces)
+        {
+            if (i == null) continue;
+            string n = NormalizeInterfaceName(i.name);
+            if (string.Equals(n, lookup, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+        return null;
+    }
+public string GetInterfacePseudoMac(string interfaceName)
     {
         interfaceName = (interfaceName ?? "").Trim();
         if (interfaceName.Length == 0) interfaceName = "?";
@@ -1777,5 +2029,25 @@ if (natTranslations == null) natTranslations = new List<NatTranslation>();
         insideGlobalOut = ig;
         return true;
     }
+
+
+
+public static string ToIPv4(uint value)
+{
+    return $"{(value >> 24) & 255}.{(value >> 16) & 255}.{(value >> 8) & 255}.{value & 255}";
+}
+
+public static int MaskToPrefix(uint mask)
+{
+    int p = 0;
+    for (int i = 31; i >= 0; i--)
+    {
+        if (((mask >> i) & 1) == 1) p++;
+        else break;
+    }
+    uint expected = p == 0 ? 0u : (uint)(0xFFFFFFFFu << (32 - p));
+    if (mask != expected) return -1;
+    return p;
+}
 
 }

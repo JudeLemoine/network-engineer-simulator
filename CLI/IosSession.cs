@@ -91,6 +91,7 @@ public class IosSession : ITerminalSession
         if (input.Equals("sh access-lists", StringComparison.OrdinalIgnoreCase)) input = "show access-lists";
         if (input.Equals("sh ip nat tr", StringComparison.OrdinalIgnoreCase)) input = "show ip nat translations";
         if (input.Equals("sh ip nat st", StringComparison.OrdinalIgnoreCase)) input = "show ip nat statistics";
+        if (input.Equals("sh ip ro", StringComparison.OrdinalIgnoreCase)) input = "show ip route";
 
         if (input.Equals("enable", StringComparison.OrdinalIgnoreCase))
         {
@@ -202,7 +203,74 @@ public class IosSession : ITerminalSession
             return "% Invalid input detected at '^' marker.";
         }
 
-        if (Mode == IosMode.GlobalConfig && input.StartsWith("ip dhcp pool ", StringComparison.OrdinalIgnoreCase))
+        
+        if (Mode == IosMode.GlobalConfig && input.StartsWith("ip route ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            string rest = input.Substring("ip route ".Length).Trim();
+            if (string.IsNullOrWhiteSpace(rest)) return "% Incomplete command.";
+
+            var parts = rest.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 3) return "% Incomplete command.";
+
+            string net = parts[0];
+            string mask = parts[1];
+            string p3 = parts[2];
+
+            string exitIf = "";
+            string nextHop = "";
+
+            if (parts.Length == 3)
+            {
+                if (TryParseIPv4(p3, out _))
+                    nextHop = p3;
+                else
+                    exitIf = p3;
+            }
+            else
+            {
+                exitIf = p3;
+                nextHop = parts[3];
+            }
+
+            bool ok = _router.AddOrUpdateStaticRoute(net, mask, nextHop, exitIf);
+            return ok ? "" : "% Invalid input detected at '^' marker.";
+        }
+
+        if (Mode == IosMode.GlobalConfig && input.StartsWith("no ip route ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            string rest = input.Substring("no ip route ".Length).Trim();
+            if (string.IsNullOrWhiteSpace(rest)) return "% Incomplete command.";
+
+            var parts = rest.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 3) return "% Incomplete command.";
+
+            string net = parts[0];
+            string mask = parts[1];
+            string p3 = parts[2];
+
+            string exitIf = "";
+            string nextHop = "";
+
+            if (parts.Length == 3)
+            {
+                if (TryParseIPv4(p3, out _))
+                    nextHop = p3;
+                else
+                    exitIf = p3;
+            }
+            else
+            {
+                exitIf = p3;
+                nextHop = parts[3];
+            }
+
+            bool removed = _router.RemoveStaticRoute(net, mask, nextHop, exitIf);
+            return removed ? "" : "% Route not found.";
+        }
+
+if (Mode == IosMode.GlobalConfig && input.StartsWith("ip dhcp pool ", StringComparison.OrdinalIgnoreCase))
         {
             if (_router == null) return "% Device not ready.";
             string name = input.Substring("ip dhcp pool ".Length).Trim();
@@ -555,6 +623,14 @@ public class IosSession : ITerminalSession
             return header + body.TrimEnd('\n');
         }
 
+
+        if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
+            input.Equals("show ip route", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            return _router.BuildShowIpRoute();
+        }
+
         if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
             input.Equals("show access-lists", StringComparison.OrdinalIgnoreCase))
         {
@@ -722,4 +798,7 @@ public class IosSession : ITerminalSession
     {
         return RouterDevice.NormalizeInterfaceName(raw);
     }
+
+private static bool TryParseIPv4(string ip, out uint value) => RouterDevice.TryParseIPv4(ip, out value);
+
 }

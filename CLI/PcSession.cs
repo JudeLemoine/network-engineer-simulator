@@ -548,8 +548,8 @@ if (input.Equals("ipconfig", StringComparison.OrdinalIgnoreCase))
                 int vlan = DetermineIngressVlan(firstSwitch, ingressIf);
 
                 var visited = new HashSet<string>();
-                bool ok = ForwardAtSwitch(firstSwitch, ingressIf, vlan, srcMac, dstMac, dstPc, visited);
-                return ok ? BuildPingSuccess(targetIp) : BuildPingFail(targetIp);
+                bool okSwitch = ForwardAtSwitch(firstSwitch, ingressIf, vlan, srcMac, dstMac, dstPc, visited);
+                return okSwitch ? BuildPingSuccess(targetIp) : BuildPingFail(targetIp);
             }
 
             if (myPort.connectedTo.owner is RouterDevice router)
@@ -562,8 +562,8 @@ if (input.Equals("ipconfig", StringComparison.OrdinalIgnoreCase))
                 int vlan = router.DetermineIngressVlan(ingressIf);
 
                 var visited = new HashSet<string>();
-                bool ok = ForwardAtRouterSwitch(router, ingressIf, vlan, srcMac, dstMac, dstPc, visited);
-                return ok ? BuildPingSuccess(targetIp) : BuildPingFail(targetIp);
+                bool okRouter = ForwardAtRouterSwitch(router, ingressIf, vlan, srcMac, dstMac, dstPc, visited);
+                return okRouter ? BuildPingSuccess(targetIp) : BuildPingFail(targetIp);
             }
 
             return BuildPingFail(targetIp);
@@ -588,54 +588,9 @@ if (input.Equals("ipconfig", StringComparison.OrdinalIgnoreCase))
         if (!CanReachDeviceAtL2(myPort, gwRouter))
             return BuildPingFail(targetIp);
 
-        if (!gwRouter.TryGetBestConnectedInterface(dstIp, out RouterInterface egress))
-            return BuildPingFail(targetIp);
-
-        string egressPhys = egress.isSubinterface ? egress.parent : egress.name;
-        if (string.IsNullOrWhiteSpace(egressPhys)) return BuildPingFail(targetIp);
-        if (!gwRouter.HasLink(egressPhys)) return BuildPingFail(targetIp);
-
-        var egressUnityPort = gwRouter.GetPortForInterface(egressPhys);
-        if (egressUnityPort == null || egressUnityPort.connectedTo == null) return BuildPingFail(targetIp);
-
-        var remote = egressUnityPort.connectedTo;
-        if (remote.owner == null) return BuildPingFail(targetIp);
-
-        if (remote.owner is PcDevice pcDirect)
-            return pcDirect == dstPc ? BuildPingSuccess(targetIp) : BuildPingFail(targetIp);
-
-        string srcMacR = $"R:{gwRouter.deviceName}:{egress.name}";
-
-        int outVlan = -1;
-        if (egress.isSubinterface && egress.dot1qVlan > 0) outVlan = egress.dot1qVlan;
-
-        if (!gwRouter.TryResolveArpForPc(targetIp, outVlan, egress.name, out string dstMacPc))
-            return BuildPingFail(targetIp);
-
-        var visited2 = new HashSet<string>();
-
-        if (remote.owner is SwitchDevice outSwitch)
-        {
-            string outIngressIf = remote.interfaceName;
-
-            int vlan = outVlan > 0 ? outVlan : DetermineIngressVlan(outSwitch, outIngressIf);
-
-            if (!IsVlanAllowedOnInterface(outSwitch, outIngressIf, vlan))
-                return BuildPingFail(targetIp);
-
-            bool ok = ForwardAtSwitch(outSwitch, outIngressIf, vlan, srcMacR, dstMacPc, dstPc, visited2);
-            return ok ? BuildPingSuccess(targetIp) : BuildPingFail(targetIp);
-        }
-
-        if (remote.owner is RouterDevice outRouter && outRouter.IsSwitchportCapable(remote.interfaceName))
-        {
-
-            int vlan = outVlan > 0 ? outVlan : outRouter.DetermineIngressVlan(remote.interfaceName);
-            bool ok = ForwardAtRouterSwitch(outRouter, remote.interfaceName, vlan, srcMacR, dstMacPc, dstPc, visited2);
-            return ok ? BuildPingSuccess(targetIp) : BuildPingFail(targetIp);
-        }
-
-        return BuildPingFail(targetIp);
+        var visitedRouters = new HashSet<int>();
+        bool ok = RouteFromRouter(gwRouter, dstIp, dstPc, 16, visitedRouters);
+        return ok ? BuildPingSuccess(targetIp) : BuildPingFail(targetIp);
     }
 
     private static PcDevice FindPcByIp(string ip)
@@ -952,6 +907,113 @@ if (input.Equals("ipconfig", StringComparison.OrdinalIgnoreCase))
 
         return false;
     }
+
+
+    bool RouteFromRouter(RouterDevice current, uint dstIp, PcDevice dstPc, int ttl, HashSet<int> visitedRouters)
+    {
+        if (current == null || dstPc == null) return false;
+        if (!current.IsPoweredOn) return false;
+        if (ttl <= 0) return false;
+
+        int rid = current.GetInstanceID();
+        if (visitedRouters.Contains(rid)) return false;
+        visitedRouters.Add(rid);
+
+        if (!current.TryRoute(dstIp, out RouterInterface egress, out string nextHopIp))
+            return false;
+
+        if (egress == null) return false;
+
+        string outPhys = egress.isSubinterface ? egress.parent : egress.name;
+        if (string.IsNullOrWhiteSpace(outPhys)) return false;
+        if (!current.HasLink(outPhys)) return false;
+
+        int outVlan = egress.isSubinterface ? egress.dot1qVlan : -1;
+
+        var p = current.ResolvePort(outPhys);
+        if (p == null || p.connectedTo == null) return false;
+
+        var remote = p.connectedTo;
+
+        string srcMacR = current.GetInterfacePseudoMac(egress.name);
+
+        if (string.Equals(nextHopIp, dstPc.ipAddress, StringComparison.OrdinalIgnoreCase))
+        {
+            string dstMacPc = dstPc.macAddress;
+
+            var visited2 = new HashSet<string>();
+            bool ok = CanReachAtL2FromRemote(remote, outVlan, srcMacR, dstMacPc, dstPc, visited2);
+            return ok;
+        }
+
+        RouterDevice nhRouter = FindRouterByExactInterfaceIp(nextHopIp);
+        if (nhRouter == null) return false;
+        if (!nhRouter.IsPoweredOn) return false;
+
+        var nhIf = nhRouter.GetInterfaceByIp(nextHopIp);
+        if (nhIf == null || !nhIf.protocolUp) return false;
+
+        var visitedHop = new HashSet<string>();
+        bool canReachNh = CanReachAtL2FromRemote(remote, outVlan, srcMacR, "__NH__", nhRouter, visitedHop);
+        if (!canReachNh) return false;
+
+        current.ArpAddOrUpdate(nextHopIp, nhRouter.GetInterfacePseudoMac(nhIf.name), egress.name);
+
+        return RouteFromRouter(nhRouter, dstIp, dstPc, ttl - 1, visitedRouters);
+    }
+
+    bool CanReachAtL2FromRemote(Port remote, int outVlan, string srcMac, string dstMac, Device destinationDevice, HashSet<string> visited)
+    {
+        if (remote == null || destinationDevice == null) return false;
+
+        if (remote.owner == destinationDevice)
+            return true;
+
+        if (remote.owner is SwitchDevice sw)
+        {
+            string ingressIf = remote.interfaceName;
+            int vlan = outVlan > 0 ? outVlan : DetermineIngressVlan(sw, ingressIf);
+
+            if (!IsVlanAllowedOnInterface(sw, ingressIf, vlan))
+                return false;
+
+            return ForwardAtSwitch(sw, ingressIf, vlan, srcMac, dstMac, destinationDevice, visited);
+        }
+
+        if (remote.owner is RouterDevice r && r.IsSwitchportCapable(remote.interfaceName))
+        {
+            string ingressIf = remote.interfaceName;
+            int vlan = outVlan > 0 ? outVlan : r.DetermineIngressVlan(ingressIf);
+
+            return ForwardAtRouterSwitch(r, ingressIf, vlan, srcMac, dstMac, destinationDevice, visited);
+        }
+
+        return false;
+    }
+
+    RouterDevice FindRouterByExactInterfaceIp(string ip)
+    {
+        if (string.IsNullOrWhiteSpace(ip)) return null;
+
+        var routers = UnityEngine.Object.FindObjectsOfType<RouterDevice>(true);
+        foreach (var r in routers)
+        {
+            if (r == null) continue;
+            if (!r.IsPoweredOn) continue;
+
+            foreach (var itf in r.interfaces)
+            {
+                if (itf == null) continue;
+                if (!itf.protocolUp) continue;
+                if (string.IsNullOrWhiteSpace(itf.ipAddress)) continue;
+
+                if (string.Equals(itf.ipAddress.Trim(), ip.Trim(), StringComparison.OrdinalIgnoreCase))
+                    return r;
+            }
+        }
+        return null;
+    }
+
 
 private static string BuildPingSuccess(string ip)
     {

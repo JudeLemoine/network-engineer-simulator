@@ -7,38 +7,38 @@ public class SimpleFPSController : MonoBehaviour
     public float lookSpeed = 2.0f;
     public float gravity = -9.81f;
 
-    private CharacterController _cc;
-    private Transform _cam;
-    private float _pitch;
-    private Vector3 _vel;
+    CharacterController _cc;
+    Transform _cam;
+    float _pitch;
+    Vector3 _vel;
 
     void Awake()
     {
         _cc = GetComponent<CharacterController>();
         var cam = GetComponentInChildren<Camera>();
         if (cam != null) _cam = cam.transform;
-
-        Cursor.lockState = CursorLockMode.Locked;
-        Cursor.visible = false;
+        if (Cursor.lockState != CursorLockMode.Locked)
+        {
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+        }
     }
 
     void Update()
     {
-
         if (TerminalScreen.EscapeHandledThisFrame)
         {
-
         }
         else
         {
-
             if (Cursor.lockState != CursorLockMode.Locked)
             {
                 bool inTerminal = TerminalScreen.IsAnyTerminalFocused;
                 bool inModuleMenu = RouterModuleSlotInteractable.IsAnyModuleMenuOpen;
                 bool inCableMenu = CableManager.IsAnyCableMenuOpen;
+                bool inRackMenu = RackSlotInteractable.IsAnyRackMenuOpen;
 
-                if (Input.GetMouseButtonDown(0) && !inTerminal && !inModuleMenu && !inCableMenu)
+                if (Input.GetMouseButtonDown(0) && !inTerminal && !inModuleMenu && !inCableMenu && !inRackMenu)
                 {
                     Cursor.lockState = CursorLockMode.Locked;
                     Cursor.visible = false;
@@ -48,7 +48,6 @@ public class SimpleFPSController : MonoBehaviour
 
         if (Cursor.lockState != CursorLockMode.Locked)
         {
-
             if (_cc.isGrounded && _vel.y < 0) _vel.y = -2f;
             _vel.y += gravity * Time.deltaTime;
             _cc.Move(_vel * Time.deltaTime);

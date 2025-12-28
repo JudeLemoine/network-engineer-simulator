@@ -6,7 +6,6 @@ public class InteractRaycaster : MonoBehaviour
 
     private void Update()
     {
-
         if (Cursor.lockState != CursorLockMode.Locked)
             return;
 
@@ -16,6 +15,13 @@ public class InteractRaycaster : MonoBehaviour
         Ray ray = new Ray(transform.position, transform.forward);
         if (Physics.Raycast(ray, out RaycastHit hit, maxDistance))
         {
+            var rackProxy = hit.collider.GetComponentInParent<RackSlotInstalledProxy>();
+            if (rackProxy != null)
+            {
+                rackProxy.Interact();
+                return;
+            }
+
             var interactable = hit.collider.GetComponentInParent<IDeviceInteractable>();
             interactable?.Interact();
         }

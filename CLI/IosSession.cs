@@ -206,7 +206,7 @@ public class IosSession : ITerminalSession
             return "% Invalid input detected at '^' marker.";
         }
 
-        
+
         if (Mode == IosMode.GlobalConfig && input.StartsWith("ip route ", StringComparison.OrdinalIgnoreCase))
         {
             if (_router == null) return "% Device not ready.";
@@ -510,7 +510,7 @@ public class IosSession : ITerminalSession
                 return "";
             }}
 
-        
+
         if (Mode == IosMode.RouterOspfConfig)
         {
             if (_router == null) return "% Device not ready.";

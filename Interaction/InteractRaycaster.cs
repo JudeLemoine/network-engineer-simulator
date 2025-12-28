@@ -13,17 +13,40 @@ public class InteractRaycaster : MonoBehaviour
             return;
 
         Ray ray = new Ray(transform.position, transform.forward);
-        if (Physics.Raycast(ray, out RaycastHit hit, maxDistance))
+        var hits = Physics.RaycastAll(ray, maxDistance);
+        if (hits == null || hits.Length == 0)
+            return;
+
+        System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+
+        for (int i = 0; i < hits.Length; i++)
         {
-            var rackProxy = hit.collider.GetComponentInParent<RackSlotInstalledProxy>();
-            if (rackProxy != null)
+            var m = hits[i].collider.GetComponentInParent<RouterModuleSlotInteractable>();
+            if (m != null)
             {
-                rackProxy.Interact();
+                m.Interact();
                 return;
             }
+        }
 
-            var interactable = hit.collider.GetComponentInParent<IDeviceInteractable>();
-            interactable?.Interact();
+        for (int i = 0; i < hits.Length; i++)
+        {
+            var p = hits[i].collider.GetComponentInParent<RackSlotInstalledProxy>();
+            if (p != null)
+            {
+                p.Interact();
+                return;
+            }
+        }
+
+        for (int i = 0; i < hits.Length; i++)
+        {
+            var interactable = hits[i].collider.GetComponentInParent<IDeviceInteractable>();
+            if (interactable != null)
+            {
+                interactable.Interact();
+                return;
+            }
         }
     }
 }

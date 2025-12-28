@@ -1,5 +1,15 @@
 using System;
-using UnityEngine;
+
+public interface ITerminalSession
+{
+    string Prompt { get; }
+    string Execute(string cmd);
+}
+
+public interface IDeviceInteractable
+{
+    void Interact();
+}
 
 [Serializable]
 public class StaticRoute

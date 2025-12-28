@@ -18,7 +18,7 @@ public class TerminalScreen : MonoBehaviour
     public TMP_Text inputLineText;
     public ScrollRect outputScroll;
 
-    
+
     public Button pasteButton;
     public Button copyButton;
 [Header("Device Link")]
@@ -51,7 +51,7 @@ public class TerminalScreen : MonoBehaviour
 
         if (pasteButton) pasteButton.onClick.AddListener(PasteFromClipboard);
         if (copyButton) copyButton.onClick.AddListener(CopyAllToClipboard);
-    
+
     }
 
     private void ResolveOwnerDevice()
@@ -102,7 +102,7 @@ public class TerminalScreen : MonoBehaviour
             return;
         }
 
-        
+
 bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
 
 if (ctrl && Input.GetKeyDown(KeyCode.V))
@@ -215,7 +215,7 @@ foreach (char c in Input.inputString)
         _session = new IosSession(routerDevice);
     }
 
-    
+
 public void PasteFromClipboard()
 {
     if (!_active) return;

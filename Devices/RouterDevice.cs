@@ -1432,7 +1432,7 @@ public class RouterDevice : Device
         return best != null;
     }
 
-    
+
     public bool AddOrUpdateStaticRoute(string network, string mask, string nextHop, string exitIf)
     {
         network = (network ?? "").Trim();
@@ -1889,7 +1889,7 @@ public class RouterDevice : Device
             return true;
         }
 
-        
+
         RecomputeOspfRoutes();
         if (_ospfRoutes != null && _ospfRoutes.Count > 0)
         {
@@ -2409,7 +2409,6 @@ if (natTranslations == null) natTranslations = new List<NatTranslation>();
         insideGlobalOut = ig;
         return true;
     }
-
 
 
 public static string ToIPv4(uint value)

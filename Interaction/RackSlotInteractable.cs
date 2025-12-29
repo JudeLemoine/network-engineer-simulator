@@ -68,16 +68,28 @@ public class RackSlotInteractable : MonoBehaviour, IDeviceInteractable
 
         SetPlaceholderVisible(false);
 
-        Vector3 pos = mountPoint.position + mountPoint.forward * forwardOffset;
+        Vector3 targetPos = mountPoint.position + mountPoint.forward * forwardOffset;
         Quaternion rot = mountPoint.rotation;
 
-        var go = Instantiate(opt.prefab, pos, rot);
+        var go = Instantiate(opt.prefab, targetPos, rot);
+        var fa = FindFrontAnchor(go.transform);
+        go.transform.rotation = rot;
+
+        if (fa != null)
+        {
+            Vector3 delta = targetPos - fa.position;
+            go.transform.position += delta;
+        }
+        else
+        {
+            go.transform.position = targetPos;
+        }
+
         if (spawnedParent != null) go.transform.SetParent(spawnedParent, true);
         else go.transform.SetParent(mountPoint, true);
 
         _installed = go;
-
-        var proxy = go.GetComponent<RackSlotInstalledProxy>();
+var proxy = go.GetComponent<RackSlotInstalledProxy>();
         if (proxy == null) proxy = go.AddComponent<RackSlotInstalledProxy>();
         proxy.Bind(this);
     }
@@ -154,4 +166,15 @@ void OnDisable()
         if (Event.current != null && Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Escape)
             CloseMenu();
     }
+    Transform FindFrontAnchor(Transform root)
+    {
+        if (root == null) return null;
+        var ts = root.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < ts.Length; i++)
+        {
+            if (ts[i] != null && ts[i].name == "FrontAnchor") return ts[i];
+        }
+        return null;
+    }
+
 }

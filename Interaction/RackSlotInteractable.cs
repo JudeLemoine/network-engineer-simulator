@@ -17,6 +17,10 @@ public class RackSlotInteractable : MonoBehaviour, IDeviceInteractable
     public float forwardOffset = 0.02f;
     public List<DeviceOption> options = new List<DeviceOption>();
 
+    public RackManager rackManager;
+
+    public int RuntimeIndex { get; private set; } = -1;
+
     public static bool IsAnyRackMenuOpen;
 
     GameObject _installed;
@@ -25,9 +29,78 @@ public class RackSlotInteractable : MonoBehaviour, IDeviceInteractable
 
     void Awake()
     {
-        if (mountPoint == null) mountPoint = transform;
-        if (placeholderRoot == null) placeholderRoot = gameObject;
+        AutoLinkChildRefs();
+
         if (_selectedIndex < 0) _selectedIndex = 0;
+        if (rackManager == null) rackManager = GetComponentInParent<RackManager>();
+
+        AutoPopulateOptionsIfEmpty();
+    }
+
+    void OnEnable()
+    {
+        if (rackManager == null) rackManager = GetComponentInParent<RackManager>();
+        if (rackManager != null) rackManager.RegisterSlot(this);
+
+        AutoLinkChildRefs();
+        AutoPopulateOptionsIfEmpty();
+    }
+
+    void OnDisable()
+    {
+        if (rackManager != null) rackManager.UnregisterSlot(this);
+        if (_menuOpen) CloseMenu();
+    }
+
+    void AutoLinkChildRefs()
+    {
+        if (mountPoint == null)
+        {
+            var mp = FindChildByExactName(transform, "MountPoint");
+            mountPoint = mp != null ? mp : transform;
+        }
+
+        if (placeholderRoot == null)
+        {
+            var ph = FindChildByExactName(transform, "Placeholder");
+            placeholderRoot = ph != null ? ph.gameObject : gameObject;
+        }
+    }
+
+    static Transform FindChildByExactName(Transform root, string exactName)
+    {
+        if (root == null) return null;
+
+        var ts = root.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < ts.Length; i++)
+        {
+            if (ts[i] == null) continue;
+            if (ts[i].name == exactName) return ts[i];
+        }
+        return null;
+    }
+
+    void AutoPopulateOptionsIfEmpty()
+    {
+        if (options != null && options.Count > 0) return;
+        if (rackManager == null) return;
+
+        var catalog = rackManager.GetCatalogOptions();
+        if (catalog == null || catalog.Count == 0) return;
+
+        options = new List<DeviceOption>(catalog.Count);
+        for (int i = 0; i < catalog.Count; i++)
+        {
+            var c = catalog[i];
+            if (c == null || c.prefab == null) continue;
+
+            var opt = new DeviceOption();
+            opt.label = c.label;
+            opt.prefab = c.prefab;
+            options.Add(opt);
+        }
+
+        if (_selectedIndex >= options.Count) _selectedIndex = 0;
     }
 
     public void Interact()
@@ -60,6 +133,12 @@ public class RackSlotInteractable : MonoBehaviour, IDeviceInteractable
         var opt = options[_selectedIndex];
         if (opt == null || opt.prefab == null) return;
 
+        if (rackManager != null)
+        {
+            rackManager.TryInstallFromSlot(this, opt.prefab);
+            return;
+        }
+
         if (_installed != null)
         {
             Destroy(_installed);
@@ -68,8 +147,9 @@ public class RackSlotInteractable : MonoBehaviour, IDeviceInteractable
 
         SetPlaceholderVisible(false);
 
-        Vector3 targetPos = mountPoint.position + mountPoint.forward * forwardOffset;
-        Quaternion rot = mountPoint.rotation;
+        var mp = mountPoint != null ? mountPoint : transform;
+        Vector3 targetPos = mp.position + mp.forward * forwardOffset;
+        Quaternion rot = mp.rotation;
 
         var go = Instantiate(opt.prefab, targetPos, rot);
         var fa = FindFrontAnchor(go.transform);
@@ -86,16 +166,23 @@ public class RackSlotInteractable : MonoBehaviour, IDeviceInteractable
         }
 
         if (spawnedParent != null) go.transform.SetParent(spawnedParent, true);
-        else go.transform.SetParent(mountPoint, true);
+        else go.transform.SetParent(mp, true);
 
         _installed = go;
-var proxy = go.GetComponent<RackSlotInstalledProxy>();
+
+        var proxy = go.GetComponent<RackSlotInstalledProxy>();
         if (proxy == null) proxy = go.AddComponent<RackSlotInstalledProxy>();
         proxy.Bind(this);
     }
 
     public void RestorePlaceholder()
     {
+        if (rackManager != null)
+        {
+            rackManager.UninstallFromSlot(this);
+            return;
+        }
+
         if (_installed != null)
         {
             Destroy(_installed);
@@ -105,7 +192,7 @@ var proxy = go.GetComponent<RackSlotInstalledProxy>();
         SetPlaceholderVisible(true);
     }
 
-    void SetPlaceholderVisible(bool visible)
+    public void SetPlaceholderVisible(bool visible)
     {
         if (placeholderRoot == null) return;
 
@@ -122,9 +209,9 @@ var proxy = go.GetComponent<RackSlotInstalledProxy>();
         for (int i = 0; i < cols.Length; i++) cols[i].enabled = visible;
     }
 
-void OnDisable()
+    public void SetRuntimeIndex(int index)
     {
-        if (_menuOpen) CloseMenu();
+        RuntimeIndex = index;
     }
 
     void OnGUI()
@@ -166,15 +253,14 @@ void OnDisable()
         if (Event.current != null && Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Escape)
             CloseMenu();
     }
-    Transform FindFrontAnchor(Transform root)
+
+    public Transform FindFrontAnchor(Transform root)
     {
         if (root == null) return null;
         var ts = root.GetComponentsInChildren<Transform>(true);
         for (int i = 0; i < ts.Length; i++)
-        {
-            if (ts[i] != null && ts[i].name == "FrontAnchor") return ts[i];
-        }
+            if (ts[i] != null && ts[i].name == "FrontAnchor")
+                return ts[i];
         return null;
     }
-
 }

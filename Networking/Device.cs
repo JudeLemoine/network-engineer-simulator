@@ -25,7 +25,6 @@ public class Device : MonoBehaviour
     protected virtual void Awake()
     {
         AssignPortsToThisDevice();
-
         _receivingExternalPower = !requiresExternalPower;
     }
 
@@ -53,6 +52,9 @@ public class Device : MonoBehaviour
 
         OnPowerStateChanged(IsPoweredOn);
         PowerStateChanged?.Invoke(IsPoweredOn);
+
+        if (CableManager.Instance != null)
+            CableManager.Instance.OnDevicePowerChanged(this);
     }
 
     public void TogglePower()
@@ -64,7 +66,6 @@ public class Device : MonoBehaviour
     {
         if (!requiresExternalPower)
         {
-
             receiving = true;
         }
 
@@ -73,10 +74,12 @@ public class Device : MonoBehaviour
 
         OnPowerStateChanged(IsPoweredOn);
         PowerStateChanged?.Invoke(IsPoweredOn);
+
+        if (CableManager.Instance != null)
+            CableManager.Instance.OnDevicePowerChanged(this);
     }
 
     protected virtual void OnPowerStateChanged(bool poweredOn)
     {
-
     }
 }

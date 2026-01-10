@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using UnityEngine;
 
 public class SwitchSession : ITerminalSession
 {
@@ -46,6 +47,31 @@ public class SwitchSession : ITerminalSession
                 return "";
             }
 
+
+            if (input.Equals("show running-config", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("show run", StringComparison.OrdinalIgnoreCase))
+            {
+                if (_sw == null) return "% Device not ready.";
+                var store = _sw.GetComponent<CliConfigStorage>();
+                if (store == null) return "% No config storage attached to this device.";
+                return store.GetRunningConfigText();
+            }
+
+            if (input.Equals("write memory", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("wr mem", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("copy running-config startup-config", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("copy run start", StringComparison.OrdinalIgnoreCase))
+            {
+                if (_sw == null) return "% Device not ready.";
+                var store = _sw.GetComponent<CliConfigStorage>();
+                if (store == null) return "% No config storage attached to this device.";
+
+                string path = store.SaveRunningConfigAsNewFile();
+                if (string.IsNullOrWhiteSpace(path)) return "% Failed to save configuration.";
+
+                return "Building configuration...\n[OK]\nSaved: " + path;
+            }
+
             if (input.StartsWith("show ", StringComparison.OrdinalIgnoreCase))
                 return HandleShow(input);
 
@@ -64,6 +90,31 @@ public class SwitchSession : ITerminalSession
             {
                 _mode = IosMode.GlobalConfig;
                 return "Enter configuration commands, one per line. End with CNTL/Z.";
+            }
+
+
+            if (input.Equals("show running-config", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("show run", StringComparison.OrdinalIgnoreCase))
+            {
+                if (_sw == null) return "% Device not ready.";
+                var store = _sw.GetComponent<CliConfigStorage>();
+                if (store == null) return "% No config storage attached to this device.";
+                return store.GetRunningConfigText();
+            }
+
+            if (input.Equals("write memory", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("wr mem", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("copy running-config startup-config", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("copy run start", StringComparison.OrdinalIgnoreCase))
+            {
+                if (_sw == null) return "% Device not ready.";
+                var store = _sw.GetComponent<CliConfigStorage>();
+                if (store == null) return "% No config storage attached to this device.";
+
+                string path = store.SaveRunningConfigAsNewFile();
+                if (string.IsNullOrWhiteSpace(path)) return "% Failed to save configuration.";
+
+                return "Building configuration...\n[OK]\nSaved: " + path;
             }
 
             if (input.StartsWith("show ", StringComparison.OrdinalIgnoreCase))

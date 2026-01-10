@@ -27,6 +27,7 @@ public class PortHoverTooltip : MonoBehaviour
     private RouterModuleSlot _hoveredSlot;
     private DevicePowerSwitch _hoveredPowerSwitch;
     private Device _hoveredDevice;
+    private RackSlotInteractable _hoveredRackSlot;
 
     private float _lastValidHoverTime = -999f;
 
@@ -50,20 +51,34 @@ public class PortHoverTooltip : MonoBehaviour
                 Port p = hit.collider.GetComponentInParent<Port>();
                 RouterModuleSlot s = null;
                 DevicePowerSwitch ps = null;
+                RackSlotInteractable rs = null;
                 Device d = null;
 
                 if (p == null) s = hit.collider.GetComponentInParent<RouterModuleSlot>();
                 if (p == null && s == null) ps = hit.collider.GetComponentInParent<DevicePowerSwitch>();
-                if (p == null && s == null && ps == null) d = hit.collider.GetComponentInParent<Device>();
+                if (p == null && s == null && ps == null) rs = hit.collider.GetComponentInParent<RackSlotInteractable>();
+
+                if (rs != null)
+                {
+                    var childDevice = rs.GetComponentInChildren<Device>(true);
+                    if (childDevice != null)
+                    {
+                        d = childDevice;
+                        rs = null;
+                    }
+                }
+
+                if (p == null && s == null && ps == null && rs == null && d == null) d = hit.collider.GetComponentInParent<Device>();
 
                 if (d != null && !d.IsPoweredOn && !showDeviceTooltipWhenPoweredOff)
                     d = null;
 
-                if (p != null || s != null || ps != null || d != null)
+                if (p != null || s != null || ps != null || rs != null || d != null)
                 {
                     _hoveredPort = p;
                     _hoveredSlot = s;
                     _hoveredPowerSwitch = ps;
+                    _hoveredRackSlot = rs;
                     _hoveredDevice = d;
 
                     foundValid = true;
@@ -84,6 +99,7 @@ public class PortHoverTooltip : MonoBehaviour
         _hoveredPort = null;
         _hoveredSlot = null;
         _hoveredPowerSwitch = null;
+        _hoveredRackSlot = null;
         _hoveredDevice = null;
     }
 
@@ -122,6 +138,12 @@ public class PortHoverTooltip : MonoBehaviour
                 text = $"Power: {state}\n{GetDeviceTypeLabel(d)}: {GetDeviceDisplayName(d)}";
             else
                 text = $"Power: {state}";
+        }
+        else if (_hoveredRackSlot != null)
+        {
+            string label = string.IsNullOrWhiteSpace(_hoveredRackSlot.transform.name) ? "Rack Slot" : _hoveredRackSlot.transform.name;
+            string idx = _hoveredRackSlot.RuntimeIndex >= 0 ? $" (index {_hoveredRackSlot.RuntimeIndex})" : "";
+            text = $"Rack Slot: {label}{idx}";
         }
         else if (_hoveredDevice != null)
         {
@@ -191,6 +213,27 @@ public class PortHoverTooltip : MonoBehaviour
 
         sb.AppendLine($"{type}: {name}");
         sb.AppendLine($"Power: {power}");
+
+        var inst = d.GetComponent<RackInstallation>();
+        if (inst != null && (!string.IsNullOrWhiteSpace(inst.StartSlotLabel) || !string.IsNullOrWhiteSpace(inst.EndSlotLabel)))
+        {
+            if (!string.IsNullOrWhiteSpace(inst.StartSlotLabel) && !string.IsNullOrWhiteSpace(inst.EndSlotLabel))
+            {
+                if (inst.StartSlotLabel == inst.EndSlotLabel)
+                    sb.AppendLine($"Rack: {inst.StartSlotLabel}");
+                else
+                    sb.AppendLine($"Rack: {inst.StartSlotLabel} - {inst.EndSlotLabel}");
+            }
+            else if (!string.IsNullOrWhiteSpace(inst.StartSlotLabel))
+            {
+                sb.AppendLine($"Rack: {inst.StartSlotLabel}");
+            }
+            else
+            {
+                sb.AppendLine($"Rack: {inst.EndSlotLabel}");
+            }
+        }
+
         sb.AppendLine("");
         sb.AppendLine("Interfaces:");
 

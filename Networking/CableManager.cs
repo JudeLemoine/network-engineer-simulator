@@ -26,6 +26,8 @@ public class CableManager : MonoBehaviour
     private string _toast = "";
     private float _toastUntil = 0f;
 
+    private bool _recomputingPower;
+
     void Awake()
     {
         Instance = this;
@@ -43,6 +45,30 @@ public class CableManager : MonoBehaviour
             TerminalScreen.LastEscapeHandledFrame = Time.frameCount;
             ClosePicker(clearSelection: true);
         }
+    }
+
+    public void OnDevicePowerChanged(Device d)
+    {
+        if (d == null) return;
+        if (_recomputingPower) return;
+
+        _recomputingPower = true;
+
+        var ports = d.GetComponentsInChildren<Port>(true);
+        for (int i = 0; i < ports.Length; i++)
+        {
+            var p = ports[i];
+            if (p == null) continue;
+            if (p.owner != d) continue;
+            if (p.medium != PortMedium.Power) continue;
+            if (!p.IsConnected || p.connectedTo == null) continue;
+
+            RecomputeReceivingPowerForDevice(p.owner);
+            if (p.connectedTo.owner != null)
+                RecomputeReceivingPowerForDevice(p.connectedTo.owner);
+        }
+
+        _recomputingPower = false;
     }
 
     public void ClickPort(Port port)
@@ -218,8 +244,10 @@ public class CableManager : MonoBehaviour
 
         if (a.medium == PortMedium.Power || b.medium == PortMedium.Power)
         {
+            _recomputingPower = true;
             RecomputeReceivingPowerForDevice(a.owner);
             RecomputeReceivingPowerForDevice(b.owner);
+            _recomputingPower = false;
         }
     }
 
@@ -237,8 +265,10 @@ public class CableManager : MonoBehaviour
             Destroy(c.gameObject);
 
         var devices = FindObjectsOfType<Device>(true);
+        _recomputingPower = true;
         foreach (var d in devices)
             RecomputeReceivingPowerForDevice(d);
+        _recomputingPower = false;
     }
 
     private void UpdateLinkState(Port port, bool linked)
@@ -275,8 +305,13 @@ public class CableManager : MonoBehaviour
         if (a == null || b == null) return;
         if (a.owner == null || b.owner == null) return;
 
+        _recomputingPower = true;
         RecomputeReceivingPowerForDevice(a.owner);
         RecomputeReceivingPowerForDevice(b.owner);
+        _recomputingPower = false;
+
+        OnDevicePowerChanged(a.owner);
+        OnDevicePowerChanged(b.owner);
     }
 
     private void RecomputeReceivingPowerForDevice(Device d)
@@ -322,7 +357,6 @@ public class CableManager : MonoBehaviour
 
     private void OnGUI()
     {
-
         if (_pickerOpen && _pickerPort != null)
         {
             GUI.depth = -1000;
@@ -425,7 +459,6 @@ public class CableManager : MonoBehaviour
                 return type == CableVisual.CableType.ConsoleRollover;
 
             case PortMedium.Power:
-
                 return false;
 
             default:
@@ -486,7 +519,6 @@ public class CableManager : MonoBehaviour
                 break;
 
             case PortMedium.Power:
-
                 break;
         }
 

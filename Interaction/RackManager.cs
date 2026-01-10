@@ -153,7 +153,9 @@ public class RackManager : MonoBehaviour
 
         var inst = go.GetComponent<RackInstallation>();
         if (inst == null) inst = go.AddComponent<RackInstallation>();
-        inst.Bind(this, startIndex, uHeight);
+        string startLabel = _slots[startIndex] != null ? _slots[startIndex].transform.name : "";
+        string endLabel = _slots[startIndex + uHeight - 1] != null ? _slots[startIndex + uHeight - 1].transform.name : "";
+        inst.Bind(this, startIndex, uHeight, startLabel, endLabel);
 
         return true;
     }

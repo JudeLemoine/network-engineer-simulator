@@ -6,47 +6,82 @@ public class InteractRaycaster : MonoBehaviour
 
     private void Update()
     {
-        if (Cursor.lockState != CursorLockMode.Locked)
-            return;
-
         if (!Input.GetMouseButtonDown(1))
             return;
 
-        Ray ray = new Ray(transform.position, transform.forward);
+        bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+        bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
+        bool alt = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
+
+        Ray ray;
+
+        if (Cursor.lockState == CursorLockMode.Locked)
+        {
+            ray = new Ray(transform.position, transform.forward);
+        }
+        else
+        {
+            Camera cam = GetComponent<Camera>();
+            if (cam == null) cam = Camera.main;
+            if (cam == null) return;
+            ray = cam.ScreenPointToRay(Input.mousePosition);
+        }
+
         var hits = Physics.RaycastAll(ray, maxDistance);
         if (hits == null || hits.Length == 0)
             return;
 
         System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
 
-        for (int i = 0; i < hits.Length; i++)
+        if (shift)
         {
-            var m = hits[i].collider.GetComponentInParent<RouterModuleSlotInteractable>();
-            if (m != null)
+            for (int i = 0; i < hits.Length; i++)
             {
-                m.Interact();
-                return;
+                var host = hits[i].collider.GetComponentInParent<TerminalPopupHost>();
+                if (host != null)
+                {
+                    host.Toggle();
+                    return;
+                }
             }
         }
 
-        for (int i = 0; i < hits.Length; i++)
+        if (ctrl && alt)
         {
-            var p = hits[i].collider.GetComponentInParent<RackSlotInstalledProxy>();
-            if (p != null)
+            for (int i = 0; i < hits.Length; i++)
             {
-                p.Interact();
-                return;
+                var p = hits[i].collider.GetComponentInParent<RackSlotInstalledProxy>();
+                if (p != null)
+                {
+                    p.Interact();
+                    return;
+                }
             }
+
+            for (int i = 0; i < hits.Length; i++)
+            {
+                var m = hits[i].collider.GetComponentInParent<RouterModuleSlotInteractable>();
+                if (m != null)
+                {
+                    m.Interact();
+                    return;
+                }
+            }
+
+            return;
         }
 
         for (int i = 0; i < hits.Length; i++)
         {
             var interactable = hits[i].collider.GetComponentInParent<IDeviceInteractable>();
-            if (interactable != null)
-            {
-                interactable.Interact();
-                return;
-            }
+            if (interactable == null) continue;
+
+            var host = hits[i].collider.GetComponentInParent<TerminalPopupHost>();
+            if (host != null)
+                continue;
+
+            interactable.Interact();
+            return;
         }
     }
 }

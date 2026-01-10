@@ -1,5 +1,5 @@
 # Network Engineer Simulator
-## written with Artificial Intelligence
+### README.md written with Artificial Intelligence
 
 This repository contains the core **C# gameplay and networking scripts** for a Unity-based network simulator inspired by **Cisco Packet Tracer**, with added emphasis on **physical realism** (racks, cabling, power) and **interactive device management**.
 

@@ -671,7 +671,34 @@ if (Mode == IosMode.InterfaceConfig)
             }
         }
 
+        
         if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
+            (input.Equals("show running-config", StringComparison.OrdinalIgnoreCase) ||
+             input.Equals("show run", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_router == null) return "% Device not ready.";
+            var store = _router.GetComponent<CliConfigStorage>();
+            if (store == null) return "% No config storage attached to this device.";
+            return store.GetRunningConfigText();
+        }
+
+        if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
+            (input.Equals("write memory", StringComparison.OrdinalIgnoreCase) ||
+             input.Equals("wr mem", StringComparison.OrdinalIgnoreCase) ||
+             input.Equals("copy running-config startup-config", StringComparison.OrdinalIgnoreCase) ||
+             input.Equals("copy run start", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_router == null) return "% Device not ready.";
+            var store = _router.GetComponent<CliConfigStorage>();
+            if (store == null) return "% No config storage attached to this device.";
+
+            string path = store.SaveRunningConfigAsNewFile();
+            if (string.IsNullOrWhiteSpace(path)) return "% Failed to save configuration.";
+
+            return "Building configuration...\n[OK]\nSaved: " + path;
+        }
+
+if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
             input.Equals("show ip interface brief", StringComparison.OrdinalIgnoreCase))
         {
             if (_router == null)

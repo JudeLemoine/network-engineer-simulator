@@ -28,6 +28,7 @@ public class PortHoverTooltip : MonoBehaviour
     private DevicePowerSwitch _hoveredPowerSwitch;
     private Device _hoveredDevice;
     private RackSlotInteractable _hoveredRackSlot;
+    private RackSlotHoverHighlight _currentSlotHighlight;
 
     private float _lastValidHoverTime = -999f;
 
@@ -56,19 +57,19 @@ public class PortHoverTooltip : MonoBehaviour
 
                 if (p == null) s = hit.collider.GetComponentInParent<RouterModuleSlot>();
                 if (p == null && s == null) ps = hit.collider.GetComponentInParent<DevicePowerSwitch>();
-                if (p == null && s == null && ps == null) rs = hit.collider.GetComponentInParent<RackSlotInteractable>();
 
-                if (rs != null)
+                if (p == null && s == null && ps == null)
                 {
-                    var childDevice = rs.GetComponentInChildren<Device>(true);
-                    if (childDevice != null)
+                    rs = hit.collider.GetComponentInParent<RackSlotInteractable>();
+                    if (rs != null)
                     {
-                        d = childDevice;
-                        rs = null;
+                        var deviceInSlot = rs.GetComponentInChildren<Device>(true);
+                        if (deviceInSlot != null) d = deviceInSlot;
                     }
                 }
 
-                if (p == null && s == null && ps == null && rs == null && d == null) d = hit.collider.GetComponentInParent<Device>();
+                if (p == null && s == null && ps == null && d == null)
+                    d = hit.collider.GetComponentInParent<Device>();
 
                 if (d != null && !d.IsPoweredOn && !showDeviceTooltipWhenPoweredOff)
                     d = null;
@@ -80,6 +81,8 @@ public class PortHoverTooltip : MonoBehaviour
                     _hoveredPowerSwitch = ps;
                     _hoveredRackSlot = rs;
                     _hoveredDevice = d;
+
+                    UpdateRackSlotHighlight(rs);
 
                     foundValid = true;
                     _lastValidHoverTime = Time.unscaledTime;
@@ -94,14 +97,32 @@ public class PortHoverTooltip : MonoBehaviour
         }
     }
 
-    private void ClearHoverImmediate()
+
+private void UpdateRackSlotHighlight(RackSlotInteractable rs)
+{
+    var next = rs != null ? rs.GetComponent<RackSlotHoverHighlight>() : null;
+
+    if (_currentSlotHighlight == next)
+        return;
+
+    if (_currentSlotHighlight != null)
+        _currentSlotHighlight.SetHovered(false);
+
+    _currentSlotHighlight = next;
+
+    if (_currentSlotHighlight != null)
+        _currentSlotHighlight.SetHovered(true);
+}
+
+private void ClearHoverImmediate()
     {
         _hoveredPort = null;
         _hoveredSlot = null;
         _hoveredPowerSwitch = null;
         _hoveredRackSlot = null;
         _hoveredDevice = null;
-    }
+            UpdateRackSlotHighlight(null);
+}
 
     private void OnGUI()
     {
@@ -138,12 +159,6 @@ public class PortHoverTooltip : MonoBehaviour
                 text = $"Power: {state}\n{GetDeviceTypeLabel(d)}: {GetDeviceDisplayName(d)}";
             else
                 text = $"Power: {state}";
-        }
-        else if (_hoveredRackSlot != null)
-        {
-            string label = string.IsNullOrWhiteSpace(_hoveredRackSlot.transform.name) ? "Rack Slot" : _hoveredRackSlot.transform.name;
-            string idx = _hoveredRackSlot.RuntimeIndex >= 0 ? $" (index {_hoveredRackSlot.RuntimeIndex})" : "";
-            text = $"Rack Slot: {label}{idx}";
         }
         else if (_hoveredDevice != null)
         {
@@ -213,28 +228,22 @@ public class PortHoverTooltip : MonoBehaviour
 
         sb.AppendLine($"{type}: {name}");
         sb.AppendLine($"Power: {power}");
+        
 
-        var inst = d.GetComponent<RackInstallation>();
-        if (inst != null && (!string.IsNullOrWhiteSpace(inst.StartSlotLabel) || !string.IsNullOrWhiteSpace(inst.EndSlotLabel)))
-        {
-            if (!string.IsNullOrWhiteSpace(inst.StartSlotLabel) && !string.IsNullOrWhiteSpace(inst.EndSlotLabel))
-            {
-                if (inst.StartSlotLabel == inst.EndSlotLabel)
-                    sb.AppendLine($"Rack: {inst.StartSlotLabel}");
-                else
-                    sb.AppendLine($"Rack: {inst.StartSlotLabel} - {inst.EndSlotLabel}");
-            }
-            else if (!string.IsNullOrWhiteSpace(inst.StartSlotLabel))
-            {
-                sb.AppendLine($"Rack: {inst.StartSlotLabel}");
-            }
-            else
-            {
-                sb.AppendLine($"Rack: {inst.EndSlotLabel}");
-            }
-        }
-
-        sb.AppendLine("");
+var ri = d.GetComponentInParent<RackInstallation>();
+if (ri != null)
+{
+    string a = ri.StartSlotLabel;
+    string b = ri.EndSlotLabel;
+    if (!string.IsNullOrWhiteSpace(a) || !string.IsNullOrWhiteSpace(b))
+    {
+        if (string.IsNullOrWhiteSpace(b) || b == a)
+            sb.AppendLine($"Rack: {a}");
+        else
+            sb.AppendLine($"Rack: {a} - {b}");
+    }
+}
+sb.AppendLine("");
         sb.AppendLine("Interfaces:");
 
         bool showAll = (d is SwitchDevice);

@@ -10,12 +10,20 @@ public class PowerOutletDevice : Device
 
     protected override void Awake()
     {
-
         requiresExternalPower = false;
-
         isPoweredOn = true;
 
         base.Awake();
+
+        var ports = GetComponentsInChildren<Port>(true);
+        for (int i = 0; i < ports.Length; i++)
+        {
+            var p = ports[i];
+            if (p == null) continue;
+            if (p.owner != null && p.owner != this) continue;
+            if (p.medium != PortMedium.Power) continue;
+            p.powerRole = PowerPortRole.Outlet;
+        }
 
         SetReceivingExternalPower(true);
     }

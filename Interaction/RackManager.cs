@@ -115,9 +115,31 @@ public class RackManager : MonoBehaviour
         var m = prefab.GetComponent<RackMountable>();
         if (m != null && m.uHeight > 0) uHeight = m.uHeight;
 
-        if (!IsRangeFree(startIndex, uHeight)) return false;
+        if (startIndex + uHeight - 1 >= _slots.Count) return false;
 
-        UninstallFromSlot(startSlot);
+        int existingStartIndex = -1;
+        if (_occupiedByStartIndex.TryGetValue(startIndex, out int occStart))
+            existingStartIndex = occStart;
+
+        for (int i = 0; i < uHeight; i++)
+        {
+            int idx = startIndex + i;
+            if (_occupiedByStartIndex.TryGetValue(idx, out int occ))
+            {
+                if (existingStartIndex < 0 || occ != existingStartIndex)
+                    return false;
+            }
+            if (_installedByStartIndex.ContainsKey(idx))
+            {
+                if (existingStartIndex < 0 || idx != existingStartIndex)
+                    return false;
+            }
+        }
+
+        if (existingStartIndex >= 0)
+            UninstallByStartIndex(existingStartIndex);
+
+        if (!IsRangeFree(startIndex, uHeight)) return false;
 
         var mountPoint = startSlot.mountPoint != null ? startSlot.mountPoint : startSlot.transform;
         Vector3 targetPos = mountPoint.position + mountPoint.forward * startSlot.forwardOffset;

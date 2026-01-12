@@ -11,10 +11,7 @@ public class TerminalInteractable : MonoBehaviour, IDeviceInteractable
             terminalScreen = GetComponentInChildren<TerminalScreen>(true);
 
         if (terminalScreen == null)
-        {
-            Debug.LogWarning("TerminalInteractable: No TerminalScreen found.");
             return;
-        }
 
         terminalScreen.Focus();
     }

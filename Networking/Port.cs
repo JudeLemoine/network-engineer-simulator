@@ -12,6 +12,13 @@ public enum PortMedium
     Power = 5
 }
 
+public enum PowerPortRole
+{
+    Any = 0,
+    Inlet = 1,
+    Outlet = 2
+}
+
 public class Port : MonoBehaviour
 {
     [Header("Port Identity")]
@@ -21,6 +28,9 @@ public class Port : MonoBehaviour
 
     [Header("Port Type")]
     public PortMedium medium = PortMedium.Ethernet;
+
+    [Header("Power Port Role")]
+    public PowerPortRole powerRole = PowerPortRole.Any;
 
     [Header("Ownership / Link")]
     public Device owner;
@@ -58,8 +68,15 @@ public class Port : MonoBehaviour
     private bool _highlighted;
     private float _nextRefresh;
 
+    private void OnValidate()
+    {
+        EnforceNamingRules();
+    }
+
     private void Awake()
     {
+        EnforceNamingRules();
+
         if (statusRenderer == null)
             statusRenderer = GetComponent<Renderer>();
 
@@ -84,6 +101,36 @@ public class Port : MonoBehaviour
         _nextRefresh = 0f;
     }
 
+    private void EnforceNamingRules()
+    {
+        if (owner == null)
+            owner = GetComponentInParent<Device>();
+
+if (medium == PortMedium.Power)
+        {
+            interfaceName = "";
+
+            if (owner is PowerOutletDevice)
+                powerRole = PowerPortRole.Outlet;
+if (powerRole == PowerPortRole.Any)
+            {
+                if (!string.IsNullOrWhiteSpace(portName))
+                {
+                    string n = portName.Trim().ToUpperInvariant();
+                    if (n == "IN" || n.StartsWith("IN "))
+                        powerRole = PowerPortRole.Inlet;
+                    else if (n.StartsWith("OUT"))
+                        powerRole = PowerPortRole.Outlet;
+                }
+            }
+
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(interfaceName))
+            interfaceName = portName;
+    }
+
     public bool CanConnectTo(Port other, out string reason)
     {
         if (other == null) { reason = "Other port is null"; return false; }
@@ -97,10 +144,25 @@ public class Port : MonoBehaviour
         if (IsConnected) { reason = "This port is already connected"; return false; }
         if (other.IsConnected) { reason = "Other port is already connected"; return false; }
 
+        if (medium == PortMedium.Wireless || other.medium == PortMedium.Wireless)
+        {
+            reason = "Wireless ports cannot be connected with cables";
+            return false;
+        }
+
         if (!IsMediumCompatible(this.medium, other.medium))
         {
             reason = $"Incompatible cable/port types: {this.medium} ↔ {other.medium}";
             return false;
+        }
+
+        if (this.medium == PortMedium.Power && other.medium == PortMedium.Power)
+        {
+            if (!IsPowerRoleCompatible(this, other))
+            {
+                reason = $"Invalid power connection: {this.powerRole} ↔ {other.powerRole}";
+                return false;
+            }
         }
 
         reason = "";
@@ -114,7 +176,6 @@ public class Port : MonoBehaviour
 
     private static bool IsMediumCompatible(PortMedium a, PortMedium b)
     {
-
         if (a == PortMedium.Wireless || b == PortMedium.Wireless)
             return false;
 
@@ -134,6 +195,19 @@ public class Port : MonoBehaviour
             return a == PortMedium.Console;
 
         return false;
+    }
+
+    private static bool IsPowerRoleCompatible(Port a, Port b)
+    {
+        if (a.powerRole == PowerPortRole.Any || b.powerRole == PowerPortRole.Any)
+            return true;
+
+        bool aOut = a.powerRole == PowerPortRole.Outlet;
+        bool aIn = a.powerRole == PowerPortRole.Inlet;
+        bool bOut = b.powerRole == PowerPortRole.Outlet;
+        bool bIn = b.powerRole == PowerPortRole.Inlet;
+
+        return (aOut && bIn) || (bOut && aIn);
     }
 
     private enum LinkState
@@ -159,13 +233,13 @@ public class Port : MonoBehaviour
 
     private LinkState GetLinkState()
     {
-
         if (!IsConnected || connectedTo == null) return LinkState.Disconnected;
 
         if (owner == null || connectedTo.owner == null) return LinkState.LinkDown;
 
         if (medium == PortMedium.Power)
         {
+            if (!IsPowerRoleCompatible(this, connectedTo)) return LinkState.LinkDown;
             return (owner.IsPoweredOn && connectedTo.owner.IsPoweredOn) ? LinkState.LinkUp : LinkState.LinkDown;
         }
 

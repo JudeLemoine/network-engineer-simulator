@@ -10,7 +10,6 @@ public class InteractRaycaster : MonoBehaviour
             return;
 
         bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
-        bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
         bool alt = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
 
         Ray ray;
@@ -44,9 +43,10 @@ public class InteractRaycaster : MonoBehaviour
                     return;
                 }
             }
+            return;
         }
 
-        if (ctrl && alt)
+        if (alt)
         {
             for (int i = 0; i < hits.Length; i++)
             {
@@ -54,6 +54,16 @@ public class InteractRaycaster : MonoBehaviour
                 if (p != null)
                 {
                     p.Interact();
+                    return;
+                }
+            }
+
+            for (int i = 0; i < hits.Length; i++)
+            {
+                var s = hits[i].collider.GetComponentInParent<RackSlotInteractable>();
+                if (s != null)
+                {
+                    s.Interact();
                     return;
                 }
             }

@@ -332,8 +332,10 @@ public class CableManager : MonoBehaviour
             if (p == null) continue;
             if (p.owner != d) continue;
             if (p.medium != PortMedium.Power) continue;
+            if (p.powerRole == PowerPortRole.Outlet) continue;
             if (!p.IsConnected || p.connectedTo == null) continue;
             if (p.connectedTo.owner == null) continue;
+            if (p.connectedTo.powerRole == PowerPortRole.Inlet) continue;
 
             var otherDev = p.connectedTo.owner;
 

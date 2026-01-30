@@ -4,7 +4,7 @@ public class InteractRaycaster : MonoBehaviour
 {
     public float maxDistance = 3f;
 
-    private void Update()
+    void Update()
     {
         if (RuntimePrefabPlacer.IsAnyPlacementUIOpen || RuntimePrefabPlacer.IsPlacingActive)
             return;
@@ -20,80 +20,68 @@ public class InteractRaycaster : MonoBehaviour
 
         if (Input.GetKeyDown(KeyCode.T))
         {
-            TryTerminalInteraction();
+            TryTerminalToggle();
             return;
         }
 
         if (!Input.GetMouseButtonDown(1))
             return;
 
-        Ray ray;
-
-        if (Cursor.lockState == CursorLockMode.Locked)
-        {
-            ray = new Ray(transform.position, transform.forward);
-        }
-        else
-        {
-            Camera cam = GetComponent<Camera>();
-            if (cam == null) cam = Camera.main;
-            if (cam == null) return;
-            ray = cam.ScreenPointToRay(Input.mousePosition);
-        }
-
-        var hits = Physics.RaycastAll(ray, maxDistance);
-        if (hits == null || hits.Length == 0)
+        Ray ray = GetRay();
+        if (!Physics.Raycast(ray, out RaycastHit hit, maxDistance))
             return;
 
-        System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
-
-        for (int i = 0; i < hits.Length; i++)
+        var cable = hit.collider.GetComponentInParent<CableVisual>();
+        if (cable != null && CableManager.Instance != null)
         {
-            var cable = hits[i].collider.GetComponentInParent<CableVisual>();
-            if (cable != null && CableManager.Instance != null)
-            {
-                CableManager.Instance.OpenCableMenu(cable);
-                return;
-            }
+            CableManager.Instance.OpenCableMenu(cable);
+            return;
         }
 
-        for (int i = 0; i < hits.Length; i++)
+        var clickedTerminal = FindTerminalScreenFromHit(hit.collider.transform);
+        if (clickedTerminal != null)
         {
-            if (hits[i].collider.GetComponentInParent<RackSlotInstalledProxy>() != null)
-                continue;
+            clickedTerminal.Focus();
+            return;
+        }
 
-            if (hits[i].collider.GetComponentInParent<RackSlotInteractable>() != null)
-                continue;
+        if (hit.collider.GetComponentInParent<RackSlotInteractable>() != null)
+            return;
 
-            var interactable = hits[i].collider.GetComponentInParent<IDeviceInteractable>();
-            if (interactable == null)
-                continue;
+        if (hit.collider.GetComponentInParent<RackSlotInstalledProxy>() != null)
+            return;
 
-            var host = hits[i].collider.GetComponentInParent<TerminalPopupHost>();
-            if (host != null)
-                continue;
+        if (hit.collider.GetComponentInParent<TerminalPopupHost>() != null)
+            return;
 
+        var interactable = hit.collider.GetComponentInParent<IDeviceInteractable>();
+        if (interactable != null)
+        {
             interactable.Interact();
             return;
         }
     }
 
+    TerminalScreen FindTerminalScreenFromHit(Transform start)
+    {
+        Transform t = start;
+        while (t != null)
+        {
+            if (t.GetComponent<Device>() != null)
+                break;
+
+            var screen = t.GetComponentInChildren<TerminalScreen>(true);
+            if (screen != null)
+                return screen;
+
+            t = t.parent;
+        }
+        return null;
+    }
+
     void TryRackInteraction()
     {
-        Ray ray;
-
-        if (Cursor.lockState == CursorLockMode.Locked)
-        {
-            ray = new Ray(transform.position, transform.forward);
-        }
-        else
-        {
-            Camera cam = GetComponent<Camera>();
-            if (cam == null) cam = Camera.main;
-            if (cam == null) return;
-            ray = cam.ScreenPointToRay(Input.mousePosition);
-        }
-
+        Ray ray = GetRay();
         if (!Physics.Raycast(ray, out RaycastHit hit, maxDistance))
             return;
 
@@ -112,22 +100,9 @@ public class InteractRaycaster : MonoBehaviour
         }
     }
 
-    void TryTerminalInteraction()
+    void TryTerminalToggle()
     {
-        Ray ray;
-
-        if (Cursor.lockState == CursorLockMode.Locked)
-        {
-            ray = new Ray(transform.position, transform.forward);
-        }
-        else
-        {
-            Camera cam = GetComponent<Camera>();
-            if (cam == null) cam = Camera.main;
-            if (cam == null) return;
-            ray = cam.ScreenPointToRay(Input.mousePosition);
-        }
-
+        Ray ray = GetRay();
         if (!Physics.Raycast(ray, out RaycastHit hit, maxDistance))
             return;
 
@@ -137,5 +112,22 @@ public class InteractRaycaster : MonoBehaviour
             host.Toggle();
             return;
         }
+
+        var clickedTerminal = FindTerminalScreenFromHit(hit.collider.transform);
+        if (clickedTerminal != null)
+        {
+            clickedTerminal.Focus();
+            return;
+        }
+    }
+
+    Ray GetRay()
+    {
+        if (Cursor.lockState == CursorLockMode.Locked)
+            return new Ray(transform.position, transform.forward);
+
+        Camera cam = GetComponent<Camera>();
+        if (cam == null) cam = Camera.main;
+        return cam.ScreenPointToRay(Input.mousePosition);
     }
 }

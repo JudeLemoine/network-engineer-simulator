@@ -5,9 +5,7 @@ using UnityEngine.UI;
 
 public class TerminalScreen : MonoBehaviour
 {
-
     public static int LastEscapeHandledFrame = -1;
-
     public static int FocusedCount = 0;
 
     public static bool EscapeHandledThisFrame => LastEscapeHandledFrame == Time.frameCount;
@@ -17,11 +15,10 @@ public class TerminalScreen : MonoBehaviour
     public TMP_Text outputText;
     public TMP_Text inputLineText;
     public ScrollRect outputScroll;
-
-
     public Button pasteButton;
     public Button copyButton;
-[Header("Device Link")]
+
+    [Header("Device Link")]
     public RouterDevice routerDevice;
     public SwitchDevice switchDevice;
     public PcDevice pcDevice;
@@ -41,6 +38,7 @@ public class TerminalScreen : MonoBehaviour
     private string _historyDraft = "";
 
     private Device _ownerDevice;
+    private string _lastStatusKey = "";
 
     private void Awake()
     {
@@ -51,14 +49,17 @@ public class TerminalScreen : MonoBehaviour
 
         if (pasteButton) pasteButton.onClick.AddListener(PasteFromClipboard);
         if (copyButton) copyButton.onClick.AddListener(CopyAllToClipboard);
-
     }
 
     private void ResolveOwnerDevice()
     {
-        if (routerDevice != null) _ownerDevice = routerDevice;
+        if (routerDevice == null) routerDevice = GetComponentInParent<RouterDevice>();
+        if (switchDevice == null) switchDevice = GetComponentInParent<SwitchDevice>();
+        if (pcDevice == null) pcDevice = GetComponentInParent<PcDevice>();
+
+        if (pcDevice != null) _ownerDevice = pcDevice;
         else if (switchDevice != null) _ownerDevice = switchDevice;
-        else if (pcDevice != null) _ownerDevice = pcDevice;
+        else if (routerDevice != null) _ownerDevice = routerDevice;
         else _ownerDevice = GetComponentInParent<Device>();
     }
 
@@ -69,17 +70,40 @@ public class TerminalScreen : MonoBehaviour
 
     private void Update()
     {
+        ResolveOwnerDevice();
 
-        if (!HasPower())
+        if (_ownerDevice == null)
         {
-            if (_active)
-                SetFocused(false);
-
-            ClearScreen();
+            ShowStatus("nodevice", "NO DEVICE LINKED\nThis terminal is not attached to any device.");
+            if (_active) SetFocused(false);
             return;
         }
 
-        if (!_active) return;
+        if (!HasPower())
+        {
+            ShowStatus("nopower", "NO POWER\nConnect power and turn the device on.");
+            if (_active) SetFocused(false);
+            return;
+        }
+
+        if (_lastStatusKey != "")
+            _lastStatusKey = "";
+
+        if (!_active)
+        {
+            RedrawInputLine();
+            return;
+        }
+
+        if (_session == null)
+        {
+            BuildSession();
+            if (_session == null)
+            {
+                ShowStatus("nosession", "NO DEVICE CONNECTED\nUnable to create a terminal session.");
+                return;
+            }
+        }
 
         if (Input.GetKeyDown(KeyCode.Escape))
         {
@@ -102,22 +126,21 @@ public class TerminalScreen : MonoBehaviour
             return;
         }
 
+        bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
 
-bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
+        if (ctrl && Input.GetKeyDown(KeyCode.V))
+        {
+            PasteFromClipboard();
+            return;
+        }
 
-if (ctrl && Input.GetKeyDown(KeyCode.V))
-{
-    PasteFromClipboard();
-    return;
-}
+        if (ctrl && Input.GetKeyDown(KeyCode.C))
+        {
+            CopyAllToClipboard();
+            return;
+        }
 
-if (ctrl && Input.GetKeyDown(KeyCode.C))
-{
-    CopyAllToClipboard();
-    return;
-}
-
-foreach (char c in Input.inputString)
+        foreach (char c in Input.inputString)
         {
             if (c == '\b')
             {
@@ -140,11 +163,33 @@ foreach (char c in Input.inputString)
         RedrawInputLine();
     }
 
+    void ShowStatus(string key, string message)
+    {
+        if (_lastStatusKey == key)
+            return;
+
+        _lastStatusKey = key;
+
+        _lineBuffer.Clear();
+        if (outputText) outputText.text = message;
+        if (inputLineText) inputLineText.text = "";
+        SnapToBottom();
+    }
+
     public void Focus()
     {
+        ResolveOwnerDevice();
+        if (_ownerDevice == null) return;
+        if (!HasPower()) return;
 
-        if (!HasPower())
+        if (_session == null)
+            BuildSession();
+
+        if (_session == null)
+        {
+            ShowStatus("nosession", "NO DEVICE CONNECTED\nUnable to create a terminal session.");
             return;
+        }
 
         SetFocused(true);
     }
@@ -158,13 +203,9 @@ foreach (char c in Input.inputString)
         if (on)
         {
             FocusedCount++;
-            BuildSession();
 
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
-
-            _historyIndex = -1;
-            _historyDraft = "";
         }
         else
         {
@@ -172,9 +213,6 @@ foreach (char c in Input.inputString)
 
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
-
-            _historyIndex = -1;
-            _historyDraft = "";
         }
 
         RedrawInputLine();
@@ -183,6 +221,14 @@ foreach (char c in Input.inputString)
 
     private void BuildSession()
     {
+        ResolveOwnerDevice();
+
+        if (_ownerDevice == null)
+        {
+            _session = null;
+            return;
+        }
+
         if (!HasPower())
         {
             _session = null;
@@ -212,86 +258,95 @@ foreach (char c in Input.inputString)
             return;
         }
 
-        _session = new IosSession(routerDevice);
+        if (routerDevice != null)
+        {
+            _session = new IosSession(routerDevice);
+            return;
+        }
+
+        _session = null;
     }
 
-
-public void PasteFromClipboard()
-{
-    if (!_active) return;
-    if (_session == null) return;
-    if (!HasPower()) return;
-
-    string clip = GUIUtility.systemCopyBuffer ?? "";
-    if (string.IsNullOrEmpty(clip)) return;
-
-    if (clip.IndexOf('\n') >= 0 || clip.IndexOf('\r') >= 0)
+    public void PasteFromClipboard()
     {
-        PasteAndExecute(clip);
-        return;
+        if (!_active) return;
+        if (_session == null) return;
+        if (!HasPower()) return;
+
+        string clip = GUIUtility.systemCopyBuffer ?? "";
+        if (string.IsNullOrEmpty(clip)) return;
+
+        if (clip.IndexOf('\n') >= 0 || clip.IndexOf('\r') >= 0)
+        {
+            PasteAndExecute(clip);
+            return;
+        }
+
+        _currentInput += clip;
+        ExitHistoryBrowseIfNeeded();
+        RedrawInputLine();
+        SnapToBottom();
     }
 
-    _currentInput += clip;
-    ExitHistoryBrowseIfNeeded();
-    RedrawInputLine();
-    SnapToBottom();
-}
-
-public void CopyAllToClipboard()
-{
-    if (_lineBuffer == null) return;
-    GUIUtility.systemCopyBuffer = string.Join("\n", _lineBuffer);
-}
-
-private void PasteAndExecute(string text)
-{
-    string normalized = text.Replace("\r\n", "\n").Replace("\r", "\n");
-    var lines = normalized.Split('\n');
-    for (int i = 0; i < lines.Length; i++)
+    public void CopyAllToClipboard()
     {
-        string cmd = lines[i].TrimEnd();
-        if (string.IsNullOrWhiteSpace(cmd)) continue;
-        SubmitCommand(cmd);
+        if (_lineBuffer == null) return;
+        GUIUtility.systemCopyBuffer = string.Join("\n", _lineBuffer);
     }
-}
 
-private void SubmitCommand(string cmdRaw)
-{
-    if (_session == null) return;
-
-    string cmd = cmdRaw.TrimEnd();
-
-    AppendText($"{_session.Prompt} {cmd}");
-
-    if (!string.IsNullOrWhiteSpace(cmd))
-        AddToHistory(cmd);
-
-    string result = _session.Execute(cmd);
-
-    if (result == "logout")
+    private void PasteAndExecute(string text)
     {
-        SetFocused(false);
-        return;
+        string normalized = text.Replace("\r\n", "\n").Replace("\r", "\n");
+        var lines = normalized.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string cmd = lines[i].TrimEnd();
+            if (string.IsNullOrWhiteSpace(cmd)) continue;
+            SubmitCommand(cmd);
+        }
     }
 
-    if (!string.IsNullOrWhiteSpace(result))
-        AppendText(result);
+    private void SubmitCommand(string cmdRaw)
+    {
+        if (_session == null) return;
 
-    _currentInput = "";
-    RedrawInputLine();
-    SnapToBottom();
-}
+        string cmd = cmdRaw.TrimEnd();
 
-private void SubmitLine()
+        AppendText($"{_session.Prompt} {cmd}");
+
+        if (!string.IsNullOrWhiteSpace(cmd))
+            AddToHistory(cmd);
+
+        string result = _session.Execute(cmd);
+
+        if (result == "logout")
+        {
+            SetFocused(false);
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(result))
+            AppendText(result);
+
+        _currentInput = "";
+        ExitHistoryBrowseIfNeeded();
+        RedrawInputLine();
+        SnapToBottom();
+    }
+
+    private void SubmitLine()
     {
         string cmd = _currentInput.TrimEnd();
         _currentInput = "";
+        ExitHistoryBrowseIfNeeded();
+
         if (string.IsNullOrWhiteSpace(cmd))
         {
             RedrawInputLine();
             SnapToBottom();
             return;
         }
+
         SubmitCommand(cmd);
     }
 

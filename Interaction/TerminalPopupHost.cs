@@ -2,73 +2,52 @@ using UnityEngine;
 
 public class TerminalPopupHost : MonoBehaviour
 {
-    public GameObject terminalPrefab;
-    public Transform mountPoint;
-    public Vector3 localOffset = new Vector3(0f, 1.1f, 0.9f);
-    public Vector3 localEuler = new Vector3(0f, 180f, 0f);
-    public bool spawnAsChild = true;
+    [SerializeField] GameObject terminalPrefab;
+    [SerializeField] Transform mountPoint;
+    [SerializeField] Vector3 localOffset = Vector3.zero;
+    [SerializeField] Vector3 localEuler;
+    [SerializeField] bool spawnAsChild = true;
+    [SerializeField] float mountForwardClearance = 0.06f;
 
-    public float mountForwardClearance = 0.06f;
+    [SerializeField] GameObject currentTerminalInstance;
 
-    public GameObject currentTerminalInstance;
-
-    public bool IsOpen => currentTerminalInstance != null;
+    public GameObject CurrentTerminalInstance => currentTerminalInstance;
 
     public void Toggle()
     {
-        if (IsOpen) Close();
-        else Open();
-    }
-
-    public void Open()
-    {
-        if (IsOpen) return;
-        if (terminalPrefab == null) return;
-
-        Vector3 pos;
-        Quaternion rot;
-
-        if (mountPoint != null)
+        if (currentTerminalInstance != null)
         {
-            pos = mountPoint.position + (mountPoint.forward * mountForwardClearance);
-            rot = mountPoint.rotation;
-        }
-        else
-        {
-            pos = transform.TransformPoint(localOffset);
-            rot = transform.rotation * Quaternion.Euler(localEuler);
+            Destroy(currentTerminalInstance);
+            currentTerminalInstance = null;
+            LinkTerminalScreen(null);
+            return;
         }
 
-        currentTerminalInstance = Object.Instantiate(terminalPrefab, pos, rot, spawnAsChild ? transform : null);
-        LinkDevice(currentTerminalInstance);
+        if (terminalPrefab == null)
+            return;
+
+        Transform parent = spawnAsChild ? transform : null;
+        currentTerminalInstance = Instantiate(terminalPrefab, parent);
+
+        Transform mp = mountPoint != null ? mountPoint : transform;
+
+        Vector3 pos = mp.position;
+        if (mountForwardClearance != 0f)
+            pos += mp.forward * mountForwardClearance;
+
+        pos += mp.TransformDirection(localOffset);
+
+        currentTerminalInstance.transform.position = pos;
+        currentTerminalInstance.transform.rotation = mp.rotation * Quaternion.Euler(localEuler);
+
+        var screen = currentTerminalInstance.GetComponentInChildren<TerminalScreen>(true);
+        LinkTerminalScreen(screen);
     }
 
-    void LinkDevice(GameObject instance)
+    void LinkTerminalScreen(TerminalScreen screen)
     {
-        if (instance == null) return;
-
-        var screen = instance.GetComponentInChildren<TerminalScreen>(true);
-        if (screen == null) return;
-
-        screen.routerDevice = GetComponent<RouterDevice>();
-        screen.switchDevice = GetComponent<SwitchDevice>();
-        screen.pcDevice = GetComponent<PcDevice>();
-    }
-
-    public void Close()
-    {
-        if (!IsOpen) return;
-        Object.Destroy(currentTerminalInstance);
-        currentTerminalInstance = null;
-    }
-
-    void OnDisable()
-    {
-        Close();
-    }
-
-    void OnDestroy()
-    {
-        Close();
+        var ti = GetComponent<TerminalInteractable>();
+        if (ti != null)
+            ti.SetTerminalScreen(screen);
     }
 }

@@ -10,8 +10,11 @@ public class RuntimePrefabPlacer : MonoBehaviour
     public string resourcesRootFolder = "";
     public LayerMask placementMask = ~0;
     public float maxPlaceDistance = 50f;
-    public bool useFallbackPlane = true;
-    public float fallbackPlaneY = 0f;
+
+    public float defaultPlaceDistance = 0.4f;
+    public float minPlaceDistance = 0.15f;
+    public float maxAdjustPlaceDistance = 10f;
+    public float scrollStep = 0.2f;
 
     public int fontSize = 18;
     public Vector2 panelSize = new Vector2(900, 520);
@@ -37,29 +40,48 @@ public class RuntimePrefabPlacer : MonoBehaviour
     GameObject _preview;
     float _previewYaw;
 
+    float _placeDistance;
+
     void Awake()
     {
         _cam = GetComponent<Camera>();
         if (_cam == null) _cam = Camera.main;
         BuildOptions();
+        _placeDistance = defaultPlaceDistance;
     }
 
     void Update()
     {
-        if (TerminalScreen.IsAnyTerminalFocused) return;
+        bool anyOtherInteractionOpen =
+            TerminalScreen.IsAnyTerminalFocused ||
+            RackSlotInteractable.IsAnyRackMenuOpen ||
+            CableManager.IsAnyCableMenuOpen ||
+            RouterModuleSlotInteractable.IsAnyModuleMenuOpen;
 
         if (Input.GetKeyDown(KeyCode.Tab))
         {
-            if (IsPlacingActive)
+            if (_menuOpen || IsPlacingActive)
             {
-                CancelPlacement();
-                CloseMenu();
+                if (IsPlacingActive)
+                {
+                    CancelPlacement();
+                    CloseMenu();
+                    return;
+                }
+
+                if (_menuOpen) CloseMenu();
+                else OpenMenu();
                 return;
             }
 
-            if (_menuOpen) CloseMenu();
-            else OpenMenu();
+            if (anyOtherInteractionOpen)
+                return;
+
+            OpenMenu();
+            return;
         }
+
+        if (TerminalScreen.IsAnyTerminalFocused) return;
 
         if (_menuOpen)
         {
@@ -85,6 +107,17 @@ public class RuntimePrefabPlacer : MonoBehaviour
                 CancelPlacement();
                 return;
             }
+
+            float scroll = Input.mouseScrollDelta.y;
+            if (scroll != 0f)
+            {
+                _placeDistance += scroll * scrollStep;
+                if (_placeDistance < minPlaceDistance) _placeDistance = minPlaceDistance;
+                if (_placeDistance > maxAdjustPlaceDistance) _placeDistance = maxAdjustPlaceDistance;
+            }
+
+            if (Input.GetKeyDown(KeyCode.R))
+                _previewYaw += 90f;
 
             if (Input.GetKeyDown(KeyCode.Q)) _previewYaw -= 15f;
             if (Input.GetKeyDown(KeyCode.E)) _previewYaw += 15f;
@@ -122,11 +155,8 @@ public class RuntimePrefabPlacer : MonoBehaviour
         _menuOpen = false;
         IsAnyPlacementUIOpen = false;
 
-        if (!IsPlacingActive)
-        {
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
-        }
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
     }
 
     void BuildOptions()
@@ -223,8 +253,12 @@ public class RuntimePrefabPlacer : MonoBehaviour
         IsPlacingActive = true;
         _previewYaw = 0f;
 
-        Cursor.lockState = CursorLockMode.None;
-        Cursor.visible = true;
+        _placeDistance = defaultPlaceDistance;
+        if (_placeDistance < minPlaceDistance) _placeDistance = minPlaceDistance;
+        if (_placeDistance > maxAdjustPlaceDistance) _placeDistance = maxAdjustPlaceDistance;
+
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
 
         CreatePreview();
         UpdatePreviewTransform();
@@ -238,11 +272,8 @@ public class RuntimePrefabPlacer : MonoBehaviour
         if (_preview != null) Destroy(_preview);
         _preview = null;
 
-        if (!_menuOpen)
-        {
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
-        }
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
     }
 
     void CreatePreview()
@@ -288,46 +319,36 @@ public class RuntimePrefabPlacer : MonoBehaviour
         if (_cam == null) _cam = Camera.main;
         if (_cam == null) return false;
 
-        Ray ray = _cam.ScreenPointToRay(Input.mousePosition);
+        Ray ray = _cam.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
 
-        if (Physics.Raycast(ray, out RaycastHit hit, maxPlaceDistance, placementMask, QueryTriggerInteraction.Ignore))
+        float desired = _placeDistance;
+        if (desired < minPlaceDistance) desired = minPlaceDistance;
+        if (desired > maxAdjustPlaceDistance) desired = maxAdjustPlaceDistance;
+        if (desired > maxPlaceDistance) desired = maxPlaceDistance;
+
+        Vector3 targetPoint = ray.GetPoint(desired);
+
+        if (Physics.Raycast(ray, out RaycastHit hit, desired, placementMask, QueryTriggerInteraction.Ignore))
         {
-            float yOffset = GetPreviewYOffset();
-            pos = hit.point;
-            pos.y += yOffset;
-            rot = Quaternion.Euler(0f, _previewYaw, 0f);
-            return true;
+            float offset = GetPreviewOffsetAlongNormal(hit.normal);
+            targetPoint = hit.point + hit.normal * offset;
         }
 
-        if (useFallbackPlane)
-        {
-            Plane p = new Plane(Vector3.up, new Vector3(0f, fallbackPlaneY, 0f));
-            if (p.Raycast(ray, out float enter))
-            {
-                Vector3 pt = ray.GetPoint(enter);
-                float yOffset = GetPreviewYOffset();
-                pt.y += yOffset;
-                pos = pt;
-                rot = Quaternion.Euler(0f, _previewYaw, 0f);
-                return true;
-            }
-        }
-
-        return false;
+        pos = targetPoint;
+        rot = Quaternion.Euler(0f, _previewYaw, 0f);
+        return true;
     }
 
-    float GetPreviewYOffset()
+    float GetPreviewOffsetAlongNormal(Vector3 normal)
+    {
+        float offset = GetPreviewApproxRadius();
+        if (offset < 0f) offset = 0f;
+        return offset;
+    }
+
+    float GetPreviewApproxRadius()
     {
         if (_preview == null) return 0f;
-
-        var cols = _preview.GetComponentsInChildren<Collider>(true);
-        if (cols != null && cols.Length > 0)
-        {
-            Bounds b = cols[0].bounds;
-            for (int i = 1; i < cols.Length; i++)
-                b.Encapsulate(cols[i].bounds);
-            return b.extents.y;
-        }
 
         var rends = _preview.GetComponentsInChildren<Renderer>(true);
         if (rends != null && rends.Length > 0)
@@ -335,7 +356,7 @@ public class RuntimePrefabPlacer : MonoBehaviour
             Bounds b = rends[0].bounds;
             for (int i = 1; i < rends.Length; i++)
                 b.Encapsulate(rends[i].bounds);
-            return b.extents.y;
+            return Mathf.Max(b.extents.x, b.extents.y, b.extents.z);
         }
 
         return 0f;

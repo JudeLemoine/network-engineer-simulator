@@ -9,6 +9,15 @@ public class InteractRaycaster : MonoBehaviour
         if (!Input.GetMouseButtonDown(1))
             return;
 
+        if (TerminalScreen.IsAnyTerminalFocused)
+            return;
+
+        if (RouterModuleSlotInteractable.IsAnyModuleMenuOpen)
+            return;
+
+        if (CableManager.IsAnyCableMenuOpen)
+            return;
+
         bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
         bool alt = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
 
@@ -79,6 +88,16 @@ public class InteractRaycaster : MonoBehaviour
             }
 
             return;
+        }
+
+        for (int i = 0; i < hits.Length; i++)
+        {
+            var cable = hits[i].collider.GetComponentInParent<CableVisual>();
+            if (cable != null && CableManager.Instance != null)
+            {
+                CableManager.Instance.OpenCableMenu(cable);
+                return;
+            }
         }
 
         for (int i = 0; i < hits.Length; i++)

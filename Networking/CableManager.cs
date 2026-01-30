@@ -23,6 +23,10 @@ public class CableManager : MonoBehaviour
     private Port _pickerPort;
     private CableVisual.CableType _pickedType = CableVisual.CableType.Auto;
 
+    private bool _cableMenuOpen;
+    private CableVisual _menuCable;
+    private CableVisual.CableType _menuPickedType = CableVisual.CableType.Auto;
+
     private string _toast = "";
     private float _toastUntil = 0f;
 
@@ -38,12 +42,17 @@ public class CableManager : MonoBehaviour
 
     private void Update()
     {
-        if (!_pickerOpen) return;
+        if (!_pickerOpen && !_cableMenuOpen) return;
 
         if (Input.GetKeyDown(KeyCode.Escape))
         {
             TerminalScreen.LastEscapeHandledFrame = Time.frameCount;
-            ClosePicker(clearSelection: true);
+
+            if (_cableMenuOpen)
+                CloseCableMenu();
+
+            if (_pickerOpen)
+                ClosePicker(clearSelection: true);
         }
     }
 
@@ -78,6 +87,9 @@ public class CableManager : MonoBehaviour
         if (_pickerOpen)
             return;
 
+        if (_cableMenuOpen)
+            return;
+
         if (_selectedPort == null && port.IsConnected)
         {
             Disconnect(port);
@@ -104,6 +116,33 @@ public class CableManager : MonoBehaviour
         _selectedPort = null;
     }
 
+    public void OpenCableMenu(CableVisual cable)
+    {
+        if (cable == null) return;
+        if (_pickerOpen) return;
+
+        _menuCable = cable;
+        _menuPickedType = CableVisual.CableType.Auto;
+
+        _cableMenuOpen = true;
+        IsAnyCableMenuOpen = true;
+
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+    }
+
+    private void CloseCableMenu()
+    {
+        _cableMenuOpen = false;
+        _menuCable = null;
+        _menuPickedType = CableVisual.CableType.Auto;
+
+        IsAnyCableMenuOpen = _pickerOpen;
+
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
+    }
+
     private void OpenPickerForPort(Port port)
     {
         if (port == null) return;
@@ -120,7 +159,8 @@ public class CableManager : MonoBehaviour
     private void ClosePicker(bool clearSelection)
     {
         _pickerOpen = false;
-        IsAnyCableMenuOpen = false;
+
+        IsAnyCableMenuOpen = _cableMenuOpen;
 
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
@@ -427,6 +467,83 @@ public class CableManager : MonoBehaviour
             GUILayout.EndArea();
         }
 
+        if (_cableMenuOpen && _menuCable != null && _menuCable.portA != null && _menuCable.portB != null)
+        {
+            GUI.depth = -1000;
+
+            var labelStyle = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = fontSize,
+                wordWrap = true
+            };
+
+            var buttonStyle = new GUIStyle(GUI.skin.button)
+            {
+                fontSize = fontSize
+            };
+
+            Vector2 size = new Vector2(panelSize.x, panelSize.y);
+            float x = (Screen.width - size.x) * 0.5f;
+            float y = (Screen.height - size.y) * 0.5f;
+            Rect panel = new Rect(x, y, size.x, size.y);
+
+            GUI.Box(panel, "");
+
+            GUILayout.BeginArea(new Rect(panel.x + 14, panel.y + 14, panel.width - 28, panel.height - 28));
+
+            Port a = _menuCable.portA;
+            Port b = _menuCable.portB;
+
+            GUILayout.Label("Cable", labelStyle);
+            GUILayout.Space(6);
+            GUILayout.Label(_menuCable.GetEndpointLabel(), labelStyle);
+            GUILayout.Space(6);
+            GUILayout.Label($"Current: {FormatCableType(_menuCable.cableType)}", labelStyle);
+
+            GUILayout.Space(12);
+            GUILayout.Label("Change cable type", labelStyle);
+            GUILayout.Space(6);
+
+            foreach (var opt in GetCableOptionsForPort(a))
+            {
+                bool selected = opt == _menuPickedType;
+
+                string display = (opt == CableVisual.CableType.Auto && a.medium == PortMedium.Power)
+                    ? "Power Cable"
+                    : FormatCableType(opt);
+
+                string text = selected ? $"▶ {display}" : display;
+
+                if (GUILayout.Button(text, buttonStyle, GUILayout.Height(34)))
+                    _menuPickedType = opt;
+            }
+
+            GUILayout.FlexibleSpace();
+
+            GUILayout.BeginHorizontal();
+
+            if (GUILayout.Button("Apply", buttonStyle, GUILayout.Height(36)))
+            {
+                ApplyCableTypeChange(_menuCable, _menuPickedType);
+                CloseCableMenu();
+            }
+
+            if (GUILayout.Button("Disconnect", buttonStyle, GUILayout.Height(36)))
+            {
+                Disconnect(a);
+                CloseCableMenu();
+            }
+
+            if (GUILayout.Button("Close (ESC)", buttonStyle, GUILayout.Height(36)))
+            {
+                CloseCableMenu();
+            }
+
+            GUILayout.EndHorizontal();
+
+            GUILayout.EndArea();
+        }
+
         if (!string.IsNullOrWhiteSpace(_toast) && Time.time <= _toastUntil)
         {
             var style = new GUIStyle(GUI.skin.label)
@@ -441,6 +558,57 @@ public class CableManager : MonoBehaviour
             GUI.Box(new Rect(rect.x - 10, rect.y - 10, rect.width + 20, rect.height + 20), GUIContent.none);
             GUI.Label(rect, _toast, style);
         }
+    }
+
+    private void ApplyCableTypeChange(CableVisual cable, CableVisual.CableType picked)
+    {
+        if (cable == null) return;
+        if (cable.portA == null || cable.portB == null) return;
+
+        Port a = cable.portA;
+        Port b = cable.portB;
+
+        if (!a.IsConnected || a.connectedTo != b)
+            return;
+
+        PortMedium medium = a.medium;
+
+        if (medium == PortMedium.Power)
+        {
+            Disconnect(a);
+            TryConnect(a, b, CableVisual.CableType.Auto);
+            return;
+        }
+
+        var recommended = GetRecommendedCableType(a, b, medium);
+        CableVisual.CableType effective = picked == CableVisual.CableType.Auto ? recommended : picked;
+
+        if (!IsCableTypeAllowedForMedium(effective, medium))
+        {
+            Toast($"That cable type does not work for {medium} ports.");
+            return;
+        }
+
+        bool linkUp = true;
+        if (medium == PortMedium.Ethernet && effective != recommended)
+            linkUp = false;
+
+        bool serialEndAIsDCE = true;
+        if (medium == PortMedium.Serial)
+        {
+            if (picked == CableVisual.CableType.Auto)
+            {
+                serialEndAIsDCE = true;
+                effective = recommended;
+            }
+            else
+            {
+                serialEndAIsDCE = (effective == CableVisual.CableType.SerialDCE);
+            }
+        }
+
+        Disconnect(a);
+        Connect(a, b, effective, serialEndAIsDCE, linkUp);
     }
 
     private static bool IsCableTypeAllowedForMedium(CableVisual.CableType type, PortMedium medium)

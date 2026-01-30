@@ -3,6 +3,7 @@ using UnityEngine;
 
 public class RackManager : MonoBehaviour
 {
+    public string resourcesRootFolder = "";
     public List<string> resourcesFolders = new List<string> { "Routers", "Switches" };
     public List<GameObject> manualPrefabs = new List<GameObject>();
 
@@ -43,16 +44,39 @@ public class RackManager : MonoBehaviour
 
         if (prefabs.Count == 0)
         {
-            if (resourcesFolders != null)
+            if (!string.IsNullOrWhiteSpace(resourcesRootFolder) || (resourcesFolders != null && resourcesFolders.Count > 0))
             {
-                for (int f = 0; f < resourcesFolders.Count; f++)
+                if (!string.IsNullOrWhiteSpace(resourcesRootFolder))
                 {
-                    var folder = resourcesFolders[f];
-                    if (string.IsNullOrWhiteSpace(folder)) continue;
+                    var loaded = Resources.LoadAll<GameObject>(resourcesRootFolder);
+                    if (loaded != null)
+                    {
+                        for (int i = 0; i < loaded.Length; i++)
+                            if (loaded[i] != null)
+                                prefabs.Add(loaded[i]);
+                    }
+                }
+                else if (resourcesFolders != null)
+                {
+                    for (int f = 0; f < resourcesFolders.Count; f++)
+                    {
+                        var folder = resourcesFolders[f];
+                        if (string.IsNullOrWhiteSpace(folder)) continue;
 
-                    var loaded = Resources.LoadAll<GameObject>(folder);
-                    if (loaded == null) continue;
+                        var loaded = Resources.LoadAll<GameObject>(folder);
+                        if (loaded == null) continue;
 
+                        for (int i = 0; i < loaded.Length; i++)
+                            if (loaded[i] != null)
+                                prefabs.Add(loaded[i]);
+                    }
+                }
+            }
+            else
+            {
+                var loaded = Resources.LoadAll<GameObject>("");
+                if (loaded != null)
+                {
                     for (int i = 0; i < loaded.Length; i++)
                         if (loaded[i] != null)
                             prefabs.Add(loaded[i]);
@@ -71,10 +95,50 @@ public class RackManager : MonoBehaviour
             var opt = new RackSlotInteractable.DeviceOption();
             opt.label = p.name;
             opt.prefab = p;
+            opt.category = GetCategoryForPrefab(p, resourcesRootFolder);
             _catalog.Add(opt);
         }
 
-        _catalog.Sort((a, b) => string.Compare(a.label, b.label, System.StringComparison.OrdinalIgnoreCase));
+        _catalog.Sort((a, b) =>
+        {
+            int c = string.Compare(a.category, b.category, System.StringComparison.OrdinalIgnoreCase);
+            if (c != 0) return c;
+            return string.Compare(a.label, b.label, System.StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    static string GetCategoryForPrefab(GameObject prefab, string rootFolder)
+    {
+        string fallback = "Devices";
+        if (prefab == null) return fallback;
+
+#if UNITY_EDITOR
+        string path = UnityEditor.AssetDatabase.GetAssetPath(prefab);
+        if (!string.IsNullOrEmpty(path))
+        {
+            string marker = "/Resources/";
+            int idx = path.IndexOf(marker, System.StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
+            {
+                string after = path.Substring(idx + marker.Length);
+
+                if (!string.IsNullOrEmpty(rootFolder))
+                {
+                    string rf = rootFolder.Trim('/');
+                    if (after.StartsWith(rf + "/", System.StringComparison.OrdinalIgnoreCase))
+                        after = after.Substring(rf.Length + 1);
+                    else if (string.Equals(after, rf, System.StringComparison.OrdinalIgnoreCase))
+                        after = "";
+                }
+
+                var parts = after.Split('/');
+                if (parts != null && parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[0]))
+                    return parts[0];
+            }
+        }
+#endif
+
+        return fallback;
     }
 
     public void RegisterSlot(RackSlotInteractable slot)
@@ -101,6 +165,21 @@ public class RackManager : MonoBehaviour
 
         for (int i = 0; i < _slots.Count; i++)
             _slots[i].SetRuntimeIndex(i);
+    }
+
+    public int GetSlotCount()
+    {
+        EnsureOrdered();
+        return _slots.Count;
+    }
+
+    public string GetSlotLabelAtIndex(int index)
+    {
+        EnsureOrdered();
+        if (index < 0 || index >= _slots.Count) return "";
+        var s = _slots[index];
+        if (s == null) return "";
+        return s.transform != null ? s.transform.name : "";
     }
 
     public bool TryInstallFromSlot(RackSlotInteractable startSlot, GameObject prefab)
@@ -175,8 +254,8 @@ public class RackManager : MonoBehaviour
 
         var inst = go.GetComponent<RackInstallation>();
         if (inst == null) inst = go.AddComponent<RackInstallation>();
-        string startLabel = _slots[startIndex] != null ? _slots[startIndex].transform.name : "";
-        string endLabel = _slots[startIndex + uHeight - 1] != null ? _slots[startIndex + uHeight - 1].transform.name : "";
+        string startLabel = GetSlotLabelAtIndex(startIndex);
+        string endLabel = GetSlotLabelAtIndex(startIndex + uHeight - 1);
         inst.Bind(this, startIndex, uHeight, startLabel, endLabel);
 
         return true;

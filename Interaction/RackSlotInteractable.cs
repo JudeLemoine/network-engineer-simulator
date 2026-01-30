@@ -8,6 +8,7 @@ public class RackSlotInteractable : MonoBehaviour, IDeviceInteractable
     public class DeviceOption
     {
         public string label;
+        public string category;
         public GameObject prefab;
     }
 
@@ -27,11 +28,14 @@ public class RackSlotInteractable : MonoBehaviour, IDeviceInteractable
     int _selectedIndex;
     bool _menuOpen;
 
+    int _selectedCategoryIndex;
+
     void Awake()
     {
         AutoLinkChildRefs();
 
         if (_selectedIndex < 0) _selectedIndex = 0;
+        if (_selectedCategoryIndex < 0) _selectedCategoryIndex = 0;
         if (rackManager == null) rackManager = GetComponentInParent<RackManager>();
 
         AutoPopulateOptionsIfEmpty();
@@ -97,6 +101,7 @@ public class RackSlotInteractable : MonoBehaviour, IDeviceInteractable
             var opt = new DeviceOption();
             opt.label = c.label;
             opt.prefab = c.prefab;
+            opt.category = string.IsNullOrWhiteSpace(c.category) ? "Devices" : c.category;
             options.Add(opt);
         }
 
@@ -114,6 +119,8 @@ public class RackSlotInteractable : MonoBehaviour, IDeviceInteractable
         IsAnyRackMenuOpen = true;
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible = true;
+
+        ClampSelectionToCategory();
     }
 
     public void OpenFromProxy()
@@ -203,48 +210,199 @@ public class RackSlotInteractable : MonoBehaviour, IDeviceInteractable
         }
 
         var rends = GetComponentsInChildren<Renderer>(true);
-        for (int i = 0; i < rends.Length; i++) rends[i].enabled = visible;
+        for (int i = 0; i < rends.Length; i++)
+            if (rends[i] != null && rends[i].enabled != visible)
+                rends[i].enabled = visible;
 
         var cols = GetComponentsInChildren<Collider>(true);
-        for (int i = 0; i < cols.Length; i++) cols[i].enabled = visible;
+        for (int i = 0; i < cols.Length; i++)
+            if (cols[i] != null && cols[i].enabled != visible)
+                cols[i].enabled = visible;
     }
 
-    public void SetRuntimeIndex(int index)
+    public void SetRuntimeIndex(int idx)
     {
-        RuntimeIndex = index;
+        RuntimeIndex = idx;
+    }
+
+    void ClampSelectionToCategory()
+    {
+        if (options == null || options.Count == 0) return;
+
+        BuildCategories(options, out var cats, out var byCat);
+        if (cats.Count == 0) return;
+
+        if (_selectedCategoryIndex < 0) _selectedCategoryIndex = 0;
+        if (_selectedCategoryIndex >= cats.Count) _selectedCategoryIndex = cats.Count - 1;
+
+        string cat = cats[_selectedCategoryIndex];
+        if (!byCat.TryGetValue(cat, out var list) || list.Count == 0) return;
+
+        if (_selectedIndex < 0 || _selectedIndex >= options.Count || !list.Contains(_selectedIndex))
+            _selectedIndex = list[0];
+    }
+
+    static void BuildCategories(List<DeviceOption> opts, out List<string> categories, out Dictionary<string, List<int>> indicesByCategory)
+    {
+        categories = new List<string>();
+        indicesByCategory = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+
+        if (opts == null) return;
+
+        for (int i = 0; i < opts.Count; i++)
+        {
+            var o = opts[i];
+            if (o == null || o.prefab == null) continue;
+
+            string cat = string.IsNullOrWhiteSpace(o.category) ? "Devices" : o.category;
+
+            if (!indicesByCategory.TryGetValue(cat, out var list))
+            {
+                list = new List<int>();
+                indicesByCategory[cat] = list;
+                categories.Add(cat);
+            }
+
+            list.Add(i);
+        }
+
+        categories.Sort((a, b) => string.Compare(a, b, StringComparison.OrdinalIgnoreCase));
+
+        for (int c = 0; c < categories.Count; c++)
+        {
+            var list = indicesByCategory[categories[c]];
+            list.Sort((ia, ib) =>
+            {
+                string la = opts[ia] != null ? opts[ia].label : "";
+                string lb = opts[ib] != null ? opts[ib].label : "";
+                return string.Compare(la, lb, StringComparison.OrdinalIgnoreCase);
+            });
+        }
+    }
+
+    int GetUHeightForPrefab(GameObject prefab)
+    {
+        if (prefab == null) return 1;
+        var m = prefab.GetComponent<RackMountable>();
+        if (m != null && m.uHeight > 0) return m.uHeight;
+        return 1;
     }
 
     void OnGUI()
     {
         if (!_menuOpen) return;
 
-        float w = 380f;
-        float h = 220f;
+        float w = 820f;
+        float h = 430f;
         Rect r = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         GUI.Box(r, "");
         GUILayout.BeginArea(r);
+
         GUILayout.Label("Rack Slot - Select Device");
-        GUILayout.Label("Choose a device to install or restore placeholder.");
+
+        string startLabel = transform != null ? transform.name : "Slot";
+        int slotCount = rackManager != null ? rackManager.GetSlotCount() : 0;
+
+        int u = 1;
+        string endLabel = startLabel;
+
+        if (options != null && _selectedIndex >= 0 && _selectedIndex < options.Count && options[_selectedIndex] != null)
+        {
+            var p = options[_selectedIndex].prefab;
+            u = GetUHeightForPrefab(p);
+
+            if (rackManager != null)
+            {
+                int endIndex = RuntimeIndex + u - 1;
+                if (endIndex < 0) endIndex = 0;
+                if (slotCount > 0 && endIndex >= slotCount) endIndex = slotCount - 1;
+
+                var lbl = rackManager.GetSlotLabelAtIndex(endIndex);
+                if (!string.IsNullOrWhiteSpace(lbl)) endLabel = lbl;
+            }
+        }
+
+        if (slotCount > 0 && RuntimeIndex >= 0)
+            GUILayout.Label($"Selected slot: {startLabel}  (index {RuntimeIndex + 1} / {slotCount})");
+        else
+            GUILayout.Label($"Selected slot: {startLabel}");
+
+        GUILayout.Label($"Selected device size: {u}U");
+        GUILayout.Label($"Will occupy: {startLabel}  →  {endLabel}");
 
         GUILayout.Space(10);
 
-        for (int i = 0; i < options.Count; i++)
+        BuildCategories(options, out var categories, out var byCategory);
+
+        if (categories.Count == 0)
         {
-            var lab = options[i] != null ? options[i].label : "";
-            if (string.IsNullOrWhiteSpace(lab)) lab = "Device";
-            bool sel = i == _selectedIndex;
-            if (GUILayout.Toggle(sel, lab, "Button"))
-                _selectedIndex = i;
+            GUILayout.Label("No rack-mountable prefabs found.");
+            GUILayout.FlexibleSpace();
+        }
+        else
+        {
+            if (_selectedCategoryIndex < 0) _selectedCategoryIndex = 0;
+            if (_selectedCategoryIndex >= categories.Count) _selectedCategoryIndex = categories.Count - 1;
+
+            GUILayout.BeginHorizontal();
+
+            GUILayout.BeginVertical(GUILayout.Width(240));
+            GUILayout.Label("Categories");
+            for (int i = 0; i < categories.Count; i++)
+            {
+                bool sel = i == _selectedCategoryIndex;
+                if (GUILayout.Toggle(sel, categories[i], "Button", GUILayout.Height(28)))
+                {
+                    if (!sel)
+                    {
+                        _selectedCategoryIndex = i;
+                        ClampSelectionToCategory();
+                    }
+                }
+            }
+            GUILayout.EndVertical();
+
+            GUILayout.Space(10);
+
+            GUILayout.BeginVertical();
+            string activeCat = categories[_selectedCategoryIndex];
+            GUILayout.Label(activeCat);
+
+            if (!byCategory.TryGetValue(activeCat, out var idxs) || idxs.Count == 0)
+            {
+                GUILayout.Label("No devices in this category.");
+            }
+            else
+            {
+                for (int j = 0; j < idxs.Count; j++)
+                {
+                    int optIndex = idxs[j];
+                    var opt = options[optIndex];
+                    string lab = opt != null ? opt.label : "";
+                    if (string.IsNullOrWhiteSpace(lab)) lab = "Device";
+
+                    int du = opt != null ? GetUHeightForPrefab(opt.prefab) : 1;
+                    string text = $"{lab} ({du}U)";
+
+                    bool sel = optIndex == _selectedIndex;
+                    if (GUILayout.Toggle(sel, text, "Button", GUILayout.Height(28)))
+                        _selectedIndex = optIndex;
+                }
+            }
+
+            GUILayout.EndVertical();
+
+            GUILayout.EndHorizontal();
         }
 
         GUILayout.FlexibleSpace();
 
         GUILayout.BeginHorizontal();
-        if (GUILayout.Button("Install Selected", GUILayout.Height(26)))
+        if (GUILayout.Button("Install Selected", GUILayout.Height(32)))
             InstallSelected();
-        if (GUILayout.Button("Restore Placeholder", GUILayout.Height(26)))
+        if (GUILayout.Button("Restore Placeholder", GUILayout.Height(32)))
             RestorePlaceholder();
-        if (GUILayout.Button("Close (ESC)", GUILayout.Height(26)))
+        if (GUILayout.Button("Close (ESC)", GUILayout.Height(32)))
             CloseMenu();
         GUILayout.EndHorizontal();
 

@@ -37,8 +37,9 @@ public class SimpleFPSController : MonoBehaviour
                 bool inModuleMenu = RouterModuleSlotInteractable.IsAnyModuleMenuOpen;
                 bool inCableMenu = CableManager.IsAnyCableMenuOpen;
                 bool inRackMenu = RackSlotInteractable.IsAnyRackMenuOpen;
+                bool inPlacementUI = RuntimePrefabPlacer.IsAnyPlacementUIOpen || RuntimePrefabPlacer.IsPlacingActive;
 
-                if (Input.GetMouseButtonDown(0) && !inTerminal && !inModuleMenu && !inCableMenu && !inRackMenu)
+                if (Input.GetMouseButtonDown(0) && !inTerminal && !inModuleMenu && !inCableMenu && !inRackMenu && !inPlacementUI)
                 {
                     Cursor.lockState = CursorLockMode.Locked;
                     Cursor.visible = false;

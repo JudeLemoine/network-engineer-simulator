@@ -598,33 +598,8 @@ public class RouterDevice : Device
         return sp;
     }
 
-    public static HashSet<int> ParseVlanList(string list)
-    {
-        var set = new HashSet<int>();
-        if (string.IsNullOrWhiteSpace(list)) return set;
-
-        foreach (var token in list.Split(',', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var t = token.Trim();
-            if (t.Contains('-'))
-            {
-                var parts = t.Split('-', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length != 2) continue;
-                if (!int.TryParse(parts[0], out int a)) continue;
-                if (!int.TryParse(parts[1], out int b)) continue;
-                if (a > b) (a, b) = (b, a);
-                for (int v = a; v <= b; v++)
-                    if (v >= 1 && v <= 4094) set.Add(v);
-            }
-            else
-            {
-                if (int.TryParse(t, out int v) && v >= 1 && v <= 4094)
-                    set.Add(v);
-            }
-        }
-
-        return set;
-    }
+    // Delegates to NetworkUtils.ParseVlanList; kept here for backwards compatibility.
+    public static HashSet<int> ParseVlanList(string list) => NetworkUtils.ParseVlanList(list);
 
     public int DetermineIngressVlan(string ingressIf)
     {
@@ -1329,35 +1304,19 @@ public class RouterDevice : Device
 
     private string GetInterfaceIp(string ifName)
     {
-        if (string.IsNullOrWhiteSpace(ifName)) return "unassigned";
+        if (string.IsNullOrWhiteSpace(ifName)) return NetworkUtils.UnassignedIp;
 
         string norm = NormalizeInterfaceName(ifName);
         var intf = interfaces?.Find(i => NormalizeInterfaceName(i.name) == norm);
 
-        if (intf == null) return "unassigned";
-        if (string.IsNullOrWhiteSpace(intf.ipAddress)) return "unassigned";
+        if (intf == null) return NetworkUtils.UnassignedIp;
+        if (string.IsNullOrWhiteSpace(intf.ipAddress)) return NetworkUtils.UnassignedIp;
 
         return intf.ipAddress;
     }
 
-    public static bool TryParseIPv4(string ip, out uint value)
-    {
-        value = 0;
-        if (string.IsNullOrWhiteSpace(ip)) return false;
-
-        var parts = ip.Trim().Split('.');
-        if (parts.Length != 4) return false;
-
-        uint result = 0;
-        for (int i = 0; i < 4; i++)
-        {
-            if (!byte.TryParse(parts[i], out byte b)) return false;
-            result = (result << 8) | b;
-        }
-
-        value = result;
-        return true;
-    }
+    // Delegates to NetworkUtils.TryParseIPv4; kept here for backwards compatibility.
+    public static bool TryParseIPv4(string ip, out uint value) => NetworkUtils.TryParseIPv4(ip, out value);
 
     public bool TryDhcpRequestOffer(string clientMac, out DhcpOffer offer)
     {
@@ -1412,7 +1371,7 @@ public class RouterDevice : Device
             if (itf == null) continue;
             if (!itf.protocolUp) continue;
 
-            if (string.IsNullOrWhiteSpace(itf.ipAddress) || itf.ipAddress == "unassigned") continue;
+            if (string.IsNullOrWhiteSpace(itf.ipAddress) || itf.ipAddress == NetworkUtils.UnassignedIp) continue;
             if (string.IsNullOrWhiteSpace(itf.subnetMask)) continue;
 
             if (!TryParseIPv4(itf.ipAddress, out uint ip)) continue;
@@ -1956,7 +1915,7 @@ return false;
         {
             if (itf == null) continue;
             if (!itf.protocolUp) continue;
-            if (string.IsNullOrWhiteSpace(itf.ipAddress) || itf.ipAddress == "unassigned") continue;
+            if (string.IsNullOrWhiteSpace(itf.ipAddress) || itf.ipAddress == NetworkUtils.UnassignedIp) continue;
             if (string.IsNullOrWhiteSpace(itf.subnetMask)) continue;
 
             if (!TryParseIPv4(itf.ipAddress, out uint ip)) continue;
@@ -2372,7 +2331,7 @@ public string GetInterfacePseudoMac(string interfaceName)
         if (!NatAclPermitsIp(natRule.aclNumber, insideLocalIp)) return false;
 
         string outsideIfIp = GetInterfaceIp(natRule.outsideInterfaceName);
-        if (string.IsNullOrWhiteSpace(outsideIfIp) || outsideIfIp == "unassigned")
+        if (string.IsNullOrWhiteSpace(outsideIfIp) || outsideIfIp == NetworkUtils.UnassignedIp)
             return false;
 
 if (natTranslations == null) natTranslations = new List<NatTranslation>();

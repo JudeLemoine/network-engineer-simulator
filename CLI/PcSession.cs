@@ -89,10 +89,13 @@ public class PcSession : ITerminalSession
         {
             return DhcpRenew();
         }
-if (input.StartsWith("set ip ", StringComparison.OrdinalIgnoreCase))
+        if (input.StartsWith("set ip ", StringComparison.OrdinalIgnoreCase))
         {
             var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length < 4) return "Usage: set ip <ip> <mask> [gateway]";
+            if (!TryParseIPv4(parts[2], out _)) return "% Invalid IP address.";
+            if (!TryParseIPv4(parts[3], out _)) return "% Invalid subnet mask.";
+            if (parts.Length >= 5 && !TryParseIPv4(parts[4], out _)) return "% Invalid gateway address.";
             _pc.ipAddress = parts[2];
             _pc.subnetMask = parts[3];
             if (parts.Length >= 5) _pc.defaultGateway = parts[4];

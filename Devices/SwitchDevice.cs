@@ -533,78 +533,10 @@ public class SwitchDevice : Device
         }
     }
 
-    public static HashSet<int> ParseVlanList(string vlanList)
-    {
-        var set = new HashSet<int>();
-        if (string.IsNullOrWhiteSpace(vlanList)) return set;
-
-        if (vlanList.Trim().Equals("all", StringComparison.OrdinalIgnoreCase))
-        {
-            for (int v = 1; v <= 4094; v++) set.Add(v);
-            return set;
-        }
-
-        var parts = vlanList.Split(',');
-        foreach (var raw in parts)
-        {
-            var token = raw.Trim();
-            if (string.IsNullOrWhiteSpace(token)) continue;
-
-            if (token.Contains("-"))
-            {
-                var rr = token.Split('-');
-                if (rr.Length != 2) continue;
-
-                if (int.TryParse(rr[0].Trim(), out int a) && int.TryParse(rr[1].Trim(), out int b))
-                {
-                    if (a > b) { int t = a; a = b; b = t; }
-                    a = Mathf.Clamp(a, 1, 4094);
-                    b = Mathf.Clamp(b, 1, 4094);
-                    for (int v = a; v <= b; v++) set.Add(v);
-                }
-            }
-            else
-            {
-                if (int.TryParse(token, out int v))
-                {
-                    v = Mathf.Clamp(v, 1, 4094);
-                    set.Add(v);
-                }
-            }
-        }
-
-        return set;
-    }
-
-    public static string ToCiscoVlanList(HashSet<int> vlans)
-    {
-        if (vlans == null || vlans.Count == 0) return "";
-
-        var list = new List<int>(vlans);
-        list.Sort();
-
-        var ranges = new List<string>();
-        int start = list[0];
-        int prev = list[0];
-
-        for (int i = 1; i < list.Count; i++)
-        {
-            int v = list[i];
-            if (v == prev + 1)
-            {
-                prev = v;
-                continue;
-            }
-
-            ranges.Add(start == prev ? start.ToString() : $"{start}-{prev}");
-            start = prev = v;
-        }
-
-        ranges.Add(start == prev ? start.ToString() : $"{start}-{prev}");
-        return string.Join(",", ranges);
-    }
-
-    public static bool IsValidVlanId(int vlan) => vlan >= 1 && vlan <= 4094;
+    // These delegate to NetworkUtils; kept here so existing call sites don't need updating.
+    public static HashSet<int> ParseVlanList(string vlanList) => NetworkUtils.ParseVlanList(vlanList);
+    public static string ToCiscoVlanList(HashSet<int> vlans) => NetworkUtils.ToCiscoVlanList(vlans);
+    public static bool IsValidVlanId(int vlan) => NetworkUtils.IsValidVlanId(vlan);
 
     public static string NormalizeInterfaceName(string raw)
     {

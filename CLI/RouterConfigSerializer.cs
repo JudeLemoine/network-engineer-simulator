@@ -45,7 +45,7 @@ public static class RouterConfigSerializer
             sb.AppendLine($"interface {itf.name}");
 
             if (!string.IsNullOrWhiteSpace(itf.ipAddress) &&
-                !itf.ipAddress.Equals("unassigned", StringComparison.OrdinalIgnoreCase) &&
+                !itf.ipAddress.Equals(NetworkUtils.UnassignedIp, StringComparison.OrdinalIgnoreCase) &&
                 !string.IsNullOrWhiteSpace(itf.subnetMask))
             {
                 sb.AppendLine($" ip address {itf.ipAddress} {itf.subnetMask}");

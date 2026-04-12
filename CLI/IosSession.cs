@@ -401,6 +401,8 @@ public class IosSession : ITerminalSession
             {
                 var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length != 3) return "% Incomplete command.";
+                if (!TryParseIPv4(parts[1], out _)) return "% Invalid network address.";
+                if (!TryParseIPv4(parts[2], out _)) return "% Invalid subnet mask.";
                 _currentPool.network = parts[1];
                 _currentPool.mask = parts[2];
                 return "";
@@ -410,6 +412,7 @@ public class IosSession : ITerminalSession
             {
                 var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length != 2) return "% Incomplete command.";
+                if (!TryParseIPv4(parts[1], out _)) return "% Invalid IP address.";
                 _currentPool.defaultRouter = parts[1];
                 return "";
             }
@@ -418,6 +421,7 @@ public class IosSession : ITerminalSession
             {
                 var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length != 2) return "% Incomplete command.";
+                if (!TryParseIPv4(parts[1], out _)) return "% Invalid IP address.";
                 _currentPool.dnsServer = parts[1];
                 return "";
             }
@@ -591,6 +595,11 @@ if (Mode == IosMode.InterfaceConfig)
                 if (parts.Length != 4)
                     return "% Incomplete command.";
 
+                if (!TryParseIPv4(parts[2], out _))
+                    return "% Invalid IP address.";
+                if (!TryParseIPv4(parts[3], out _))
+                    return "% Invalid subnet mask.";
+
                 _currentIf.ipAddress = parts[2];
                 _currentIf.subnetMask = parts[3];
                 _router.RefreshProtocolStates();
@@ -719,7 +728,7 @@ if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
             {
                 if (i == null) continue;
 
-                string ip = string.IsNullOrWhiteSpace(i.ipAddress) ? "unassigned" : i.ipAddress;
+                string ip = string.IsNullOrWhiteSpace(i.ipAddress) ? NetworkUtils.UnassignedIp : i.ipAddress;
                 string status = i.adminUp ? "up" : "administratively down";
                 string proto = i.protocolUp ? "up" : "down";
                 body += $"{i.name,-22} {ip,-15} YES unset  {status,-20} {proto}\n";

@@ -214,8 +214,36 @@ if (input.Equals("ipconfig", StringComparison.OrdinalIgnoreCase))
         if (input.StartsWith("ping ", StringComparison.OrdinalIgnoreCase))
         {
             string target = input.Substring("ping ".Length).Trim();
+            // Resolve hostname to IP if needed
+            if (!TryParseIPv4(target, out _))
+            {
+                string resolved = ForwardLookup(target);
+                if (string.IsNullOrWhiteSpace(resolved))
+                    return $"Ping request could not find host {target}. Please check the name and try again.";
+                target = resolved;
+            }
             return DoPing(target);
         }
+
+        if (input.StartsWith("tracert ", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("traceroute ", StringComparison.OrdinalIgnoreCase))
+        {
+            string target = input.StartsWith("tracert ", StringComparison.OrdinalIgnoreCase)
+                ? input.Substring("tracert ".Length).Trim()
+                : input.Substring("traceroute ".Length).Trim();
+
+            if (!TryParseIPv4(target, out _))
+            {
+                string resolved = ForwardLookup(target);
+                if (string.IsNullOrWhiteSpace(resolved))
+                    return $"Unable to resolve target system name {target}.";
+                target = resolved;
+            }
+            return DoTracert(target);
+        }
+
+        if (input.Equals("netstat", StringComparison.OrdinalIgnoreCase))
+            return DoNetstat();
 
         if (input.StartsWith("telnet ", StringComparison.OrdinalIgnoreCase))
         {
@@ -233,8 +261,10 @@ if (input.Equals("ipconfig", StringComparison.OrdinalIgnoreCase))
                 "  ipconfig\n" +
                 "  ipconfig /all\n" +
                 "  set ip <ip> <mask> [gw]\n" +
-                "  ping <ip>\n" +
+                "  ping <ip|hostname>\n" +
+                "  tracert <ip|hostname>\n" +
                 "  nslookup <hostname>\n" +
+                "  netstat\n" +
                 "  arp -a\n" +
                 "  arp -d *\n" +
                 "  wifi help\n" +
@@ -650,6 +680,97 @@ if (input.Equals("ipconfig", StringComparison.OrdinalIgnoreCase))
         }
 
         return null;
+    }
+
+    private string DoTracert(string targetIp)
+    {
+        if (_pc == null) return "Trace failed.";
+        if (!TryParseIPv4(targetIp, out uint dstIp)) return $"Unable to resolve target system name {targetIp}.";
+        if (!TryParseIPv4(_pc.ipAddress, out uint myIp)) return "Trace failed: no source IP.";
+        if (!TryParseIPv4(_pc.subnetMask, out uint myMask)) return "Trace failed.";
+
+        var hops = new List<string>();
+        string header = $"\nTracing route to {targetIp}\nover a maximum of 30 hops:\n";
+
+        // Is the target on the same subnet? 0 hops through gateway.
+        if (IsSameSubnet(myIp, dstIp, myMask))
+        {
+            hops.Add($"  1    <1 ms    <1 ms    <1 ms  {targetIp}");
+            return header + string.Join("\n", hops) + "\n\nTrace complete.";
+        }
+
+        // Go through default gateway
+        if (!TryParseIPv4(_pc.defaultGateway, out uint gwIp))
+            return header + "  1     *        *        *     Request timed out.\n\nTrace complete.";
+
+        RouterDevice gwRouter = FindRouterByInterfaceIp(_pc.defaultGateway, myMask, myIp);
+        if (gwRouter == null)
+            return header + "  1     *        *        *     Request timed out.\n\nTrace complete.";
+
+        hops.Add($"  1    <1 ms    <1 ms    <1 ms  {_pc.defaultGateway}");
+
+        // Follow routing hops
+        RouterDevice current = gwRouter;
+        var visited = new HashSet<int>();
+        int hopNum = 2;
+
+        while (hopNum <= 30 && current != null)
+        {
+            int rid = current.GetInstanceID();
+            if (visited.Contains(rid)) break;
+            visited.Add(rid);
+
+            if (!current.TryRoute(dstIp, out RouterInterface egress, out string nextHopIp))
+                break;
+
+            // Directly attached to destination?
+            if (current.TryGetBestConnectedInterface(dstIp, out _))
+            {
+                hops.Add($"  {hopNum}    <1 ms    <1 ms    <1 ms  {targetIp}");
+                break;
+            }
+
+            if (string.IsNullOrWhiteSpace(nextHopIp) || string.Equals(nextHopIp, targetIp, StringComparison.OrdinalIgnoreCase))
+            {
+                hops.Add($"  {hopNum}    <1 ms    <1 ms    <1 ms  {targetIp}");
+                break;
+            }
+
+            hops.Add($"  {hopNum}    <1 ms    <1 ms    <1 ms  {nextHopIp}");
+            hopNum++;
+
+            var nextRouter = FindRouterByExactInterfaceIp(nextHopIp);
+            if (nextRouter == null) break;
+            current = nextRouter;
+        }
+
+        return header + string.Join("\n", hops) + "\n\nTrace complete.";
+    }
+
+    private string DoNetstat()
+    {
+        var sh = _pc.GetComponent<ServiceHost>();
+        if (sh == null || sh.services == null || sh.services.Count == 0)
+        {
+            return
+                "Active Connections\n\n" +
+                "  Proto  Local Address          Foreign Address        State\n" +
+                "(No open ports)";
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("Active Connections\n");
+        sb.AppendLine("  Proto  Local Address          Foreign Address        State");
+
+        foreach (var svc in sh.services)
+        {
+            if (svc == null || !svc.enabled) continue;
+            string proto = svc.protocol == ServiceHost.ServiceProtocol.Tcp ? "TCP" : "UDP";
+            string local = $"{_pc.ipAddress}:{svc.port}";
+            sb.AppendLine($"  {proto,-7}{local,-23}{"*:*",-23}LISTENING");
+        }
+
+        return sb.ToString().TrimEnd();
     }
 
     private string DoPing(string targetIp)

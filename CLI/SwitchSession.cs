@@ -12,13 +12,20 @@ public class SwitchSession : ITerminalSession
     private int _currentSviVlan = -1;
 
     private IosMode _mode = IosMode.UserExec;
+    private bool _awaitingConsolePassword = false;
 
-    public SwitchSession(SwitchDevice sw) { _sw = sw; }
+    public SwitchSession(SwitchDevice sw)
+    {
+        _sw = sw;
+        if (_sw != null && _sw.consoleLoginEnabled)
+            _awaitingConsolePassword = true;
+    }
 
     public string Prompt
     {
         get
         {
+            if (_awaitingConsolePassword) return "Password:";
             string host = _sw != null ? _sw.deviceName : "Switch";
             return _mode switch
             {
@@ -27,6 +34,7 @@ public class SwitchSession : ITerminalSession
                 IosMode.GlobalConfig => $"{host}(config)#",
                 IosMode.InterfaceConfig => $"{host}(config-if)#",
                 IosMode.SviConfig => $"{host}(config-if)#",
+                IosMode.LineConsoleConfig => $"{host}(config-line)#",
                 _ => $"{host}>"
             };
         }
@@ -35,6 +43,15 @@ public class SwitchSession : ITerminalSession
     public string Execute(string input)
     {
         input = (input ?? "").Trim();
+
+        if (_awaitingConsolePassword)
+        {
+            if (string.IsNullOrEmpty(input)) return "";
+            string pw = _sw?.consolePassword ?? "";
+            if (input == pw) { _awaitingConsolePassword = false; return ""; }
+            return "% Bad passwords";
+        }
+
         if (string.IsNullOrWhiteSpace(input)) return "";
 
         if (input.Equals("en", StringComparison.OrdinalIgnoreCase)) input = "enable";
@@ -186,6 +203,20 @@ public class SwitchSession : ITerminalSession
                 _currentPort = null;
                 _rangePorts = null;
                 _mode = IosMode.InterfaceConfig;
+                return "";
+            }
+
+            if (input.StartsWith("hostname ", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 2)
+                    _sw.deviceName = parts[1];
+                return "";
+            }
+
+            if (input.Equals("line console 0", StringComparison.OrdinalIgnoreCase))
+            {
+                _mode = IosMode.LineConsoleConfig;
                 return "";
             }
 
@@ -409,6 +440,154 @@ public class SwitchSession : ITerminalSession
                 foreach (var p in GetSelectedPhysicalPorts())
                     ApplyAllowedVlanChangeToPhysical(p, rest);
 
+                return "";
+            }
+
+            if (input.StartsWith("description ", StringComparison.OrdinalIgnoreCase))
+            {
+                string desc = input.Substring("description ".Length);
+                foreach (var p in GetSelectedPhysicalPorts())
+                    p.description = desc;
+                if (_currentPortChannel != null) { /* port-channel descriptions not stored */ }
+                return "";
+            }
+
+            if (input.Equals("no description", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var p in GetSelectedPhysicalPorts())
+                    p.description = "";
+                return "";
+            }
+
+            // Port security
+            if (input.Equals("switchport port-security", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var p in GetSelectedPhysicalPorts()) p.portSecurityEnabled = true;
+                return "";
+            }
+
+            if (input.Equals("no switchport port-security", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var p in GetSelectedPhysicalPorts())
+                {
+                    p.portSecurityEnabled = false;
+                    p.portSecurityShutdown = false;
+                    p.portSecurityViolationCount = 0;
+                    p.portSecurityStickyMacs?.Clear();
+                }
+                return "";
+            }
+
+            if (input.StartsWith("switchport port-security maximum ", StringComparison.OrdinalIgnoreCase))
+            {
+                string numStr = input.Substring("switchport port-security maximum ".Length).Trim();
+                if (!int.TryParse(numStr, out int max) || max < 1 || max > 132)
+                    return "% Invalid maximum value (1-132).";
+                foreach (var p in GetSelectedPhysicalPorts()) p.portSecurityMaxMac = max;
+                return "";
+            }
+
+            if (input.StartsWith("switchport port-security violation ", StringComparison.OrdinalIgnoreCase))
+            {
+                string mode = input.Substring("switchport port-security violation ".Length).Trim().ToLower();
+                if (mode != "protect" && mode != "restrict" && mode != "shutdown")
+                    return "% Invalid violation mode.";
+                foreach (var p in GetSelectedPhysicalPorts()) p.portSecurityViolation = mode;
+                return "";
+            }
+
+            if (input.Equals("switchport port-security mac-address sticky", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var p in GetSelectedPhysicalPorts()) p.portSecuritySticky = true;
+                return "";
+            }
+
+            if (input.Equals("no switchport port-security mac-address sticky", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var p in GetSelectedPhysicalPorts()) p.portSecuritySticky = false;
+                return "";
+            }
+
+            if (input.StartsWith("switchport port-security mac-address ", StringComparison.OrdinalIgnoreCase))
+            {
+                string mac = input.Substring("switchport port-security mac-address ".Length).Trim().ToUpperInvariant();
+                foreach (var p in GetSelectedPhysicalPorts())
+                {
+                    if (p.portSecurityStickyMacs == null) p.portSecurityStickyMacs = new List<string>();
+                    if (!p.portSecurityStickyMacs.Contains(mac))
+                        p.portSecurityStickyMacs.Add(mac);
+                }
+                return "";
+            }
+
+            if (input.Equals("shutdown port-security", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("no shutdown", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("no shut", StringComparison.OrdinalIgnoreCase))
+            {
+                // no shutdown resets err-disabled as well
+                foreach (var p in GetSelectedPhysicalPorts())
+                {
+                    bool wasShut = input.Equals("shutdown", StringComparison.OrdinalIgnoreCase) ||
+                                   input.Equals("shut", StringComparison.OrdinalIgnoreCase);
+                    if (!wasShut) { p.portSecurityShutdown = false; p.portSecurityViolationCount = 0; }
+                }
+            }
+
+            if (input.StartsWith("speed ", StringComparison.OrdinalIgnoreCase))
+            {
+                string val = input.Substring("speed ".Length).Trim();
+                if (!int.TryParse(val, out int spd)) return "% Invalid speed value.";
+                foreach (var p in GetSelectedPhysicalPorts())
+                    p.speed = spd;
+                return "";
+            }
+
+            if (input.Equals("speed auto", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var p in GetSelectedPhysicalPorts())
+                    p.speed = 0;
+                return "";
+            }
+
+            if (input.StartsWith("duplex ", StringComparison.OrdinalIgnoreCase))
+            {
+                string val = input.Substring("duplex ".Length).Trim().ToLower();
+                if (val != "full" && val != "half" && val != "auto")
+                    return "% Invalid duplex value.";
+                foreach (var p in GetSelectedPhysicalPorts())
+                    p.duplex = val;
+                return "";
+            }
+
+            return "% Invalid input detected at '^' marker.";
+        }
+
+        if (_mode == IosMode.LineConsoleConfig)
+        {
+            if (input.Equals("exit", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("end", StringComparison.OrdinalIgnoreCase))
+            {
+                _mode = input.Equals("end", StringComparison.OrdinalIgnoreCase) ? IosMode.PrivExec : IosMode.GlobalConfig;
+                return "";
+            }
+
+            if (_sw == null) return "% Device not ready.";
+
+            if (input.StartsWith("password ", StringComparison.OrdinalIgnoreCase))
+            {
+                _sw.consolePassword = input.Substring("password ".Length);
+                return "";
+            }
+
+            if (input.Equals("login", StringComparison.OrdinalIgnoreCase))
+            {
+                _sw.consoleLoginEnabled = true;
+                return "";
+            }
+
+            if (input.Equals("no login", StringComparison.OrdinalIgnoreCase))
+            {
+                _sw.consoleLoginEnabled = false;
                 return "";
             }
 
@@ -756,6 +935,27 @@ public class SwitchSession : ITerminalSession
 
         if (input.Equals("show vlan brief", StringComparison.OrdinalIgnoreCase))
             return BuildShowVlanBrief();
+
+        if (input.Equals("show vtp status", StringComparison.OrdinalIgnoreCase))
+            return BuildShowVtpStatus();
+
+        if (input.Equals("show interfaces status", StringComparison.OrdinalIgnoreCase) ||
+            input.Equals("show int status", StringComparison.OrdinalIgnoreCase))
+            return BuildShowInterfacesStatus();
+
+        if (input.Equals("show cdp neighbors", StringComparison.OrdinalIgnoreCase) ||
+            input.Equals("show cdp nei", StringComparison.OrdinalIgnoreCase))
+            return BuildShowCdpNeighbors();
+
+        if (input.Equals("show port-security", StringComparison.OrdinalIgnoreCase))
+            return BuildShowPortSecurity(null);
+
+        if (input.StartsWith("show port-security interface ", StringComparison.OrdinalIgnoreCase))
+        {
+            string ifName = input.Substring("show port-security interface ".Length).Trim();
+            ifName = SwitchDevice.NormalizeInterfaceName(ifName);
+            return BuildShowPortSecurity(ifName);
+        }
 
         return "% Invalid input detected at '^' marker.";
     }
@@ -1202,6 +1402,130 @@ public class SwitchSession : ITerminalSession
             output += $"{v.id.ToString().PadRight(4)}  {v.name.PadRight(31)}  {status.PadRight(8)}  {ports.Trim()}\n";
         }
 
+        return output.TrimEnd('\n');
+    }
+
+    private string BuildShowVtpStatus()
+    {
+        string host = _sw != null ? (_sw.deviceName ?? "Switch") : "Switch";
+        return
+            $"VTP Version capable             : 1 to 3\n" +
+            $"VTP version running             : 1\n" +
+            $"VTP Domain Name                 : (null)\n" +
+            $"VTP Pruning Mode                : Disabled\n" +
+            $"VTP Traps Generation            : Disabled\n" +
+            $"Device ID                       : {_sw?.GetBridgeMac() ?? "00:00:00:00:00:00"}\n" +
+            $"Configuration last modified by 0.0.0.0 at 0-0-00 00:00:00\n\n" +
+            $"Feature VLAN:\n" +
+            $"--------------\n" +
+            $"VTP Operating Mode                : Server\n" +
+            $"Maximum VLANs supported locally   : 1005\n" +
+            $"Number of existing VLANs          : {_sw?.vlans?.Count ?? 1}\n" +
+            $"Configuration Revision            : 0\n" +
+            $"MD5 digest                        : 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00";
+    }
+
+    private string BuildShowInterfacesStatus()
+    {
+        string output = "Port      Name               Status       Vlan       Duplex  Speed Type\n";
+
+        foreach (var p in _sw.ports)
+        {
+            if (p == null) continue;
+            bool linked = _sw.HasLink(p.name);
+            string status = !p.adminUp ? "disabled" : linked ? "connected" : "notconnect";
+            string vlan = p.mode == SwitchportMode.Trunk ? "trunk" : p.accessVlan.ToString();
+            string duplex = p.duplex ?? "a-full";
+            string speed = p.speed > 0 ? $"a-{p.speed}" : "a-1000";
+            string name = p.description.Length > 18 ? p.description.Substring(0, 18) : p.description;
+
+            output += $"{SwitchDevice.ShortIfName(p.name),-10}{name,-19}{status,-13}{vlan,-11}{duplex,-8}{speed,-6}10/100/1000BaseTX\n";
+        }
+
+        return output.TrimEnd('\n');
+    }
+
+    private string BuildShowPortSecurity(string ifFilter)
+    {
+        if (ifFilter != null)
+        {
+            var p = _sw.GetPort(ifFilter);
+            if (p == null) return $"% Invalid interface {ifFilter}";
+
+            string status = p.portSecurityShutdown ? "Secure-shutdown"
+                          : p.portSecurityEnabled  ? "Secure-up"
+                          : "Disabled";
+            string violation = p.portSecurityViolation ?? "shutdown";
+            string sticky = p.portSecuritySticky ? "Enabled" : "Disabled";
+
+            string output = $"Port Security              : {(p.portSecurityEnabled ? "Enabled" : "Disabled")}\n";
+            output += $"Port Status                : {status}\n";
+            output += $"Violation Mode             : {violation}\n";
+            output += $"Aging Time                 : 0 mins\n";
+            output += $"Aging Type                 : Absolute\n";
+            output += $"SecureStatic Address Aging : Disabled\n";
+            output += $"Maximum MAC Addresses      : {p.portSecurityMaxMac}\n";
+            output += $"Total MAC Addresses        : {(p.portSecurityStickyMacs?.Count ?? 0)}\n";
+            output += $"Configured MAC Addresses   : {(p.portSecurityStickyMacs?.Count ?? 0)}\n";
+            output += $"Sticky MAC Addresses       : {(p.portSecuritySticky ? (p.portSecurityStickyMacs?.Count ?? 0) : 0)}\n";
+            output += $"Last Source Address:Vlan   : 0000.0000.0000:0\n";
+            output += $"Security Violation Count   : {p.portSecurityViolationCount}\n";
+
+            if (p.portSecurityStickyMacs != null && p.portSecurityStickyMacs.Count > 0)
+            {
+                output += "\nSecure MAC Addresses:\n";
+                foreach (var mac in p.portSecurityStickyMacs)
+                    output += $"  {mac}\n";
+            }
+
+            return output.TrimEnd('\n');
+        }
+
+        // Summary table
+        string hdr = "Secure Port  MaxSecureAddr  CurrentAddr  SecurityViolation  Security Action\n";
+        hdr += "-----------  -------------  -----------  -----------------  ---------------\n";
+
+        bool any = false;
+        foreach (var p in _sw.ports)
+        {
+            if (p == null || !p.portSecurityEnabled) continue;
+            string action = p.portSecurityViolation ?? "shutdown";
+            hdr += $"{SwitchDevice.ShortIfName(p.name),-13}{p.portSecurityMaxMac,-15}{(p.portSecurityStickyMacs?.Count ?? 0),-13}{p.portSecurityViolationCount,-19}{action}\n";
+            any = true;
+        }
+
+        if (!any) hdr += "(No ports have port security enabled)\n";
+        return hdr.TrimEnd('\n');
+    }
+
+    private string BuildShowCdpNeighbors()
+    {
+        string output = "Capability Codes: R - Router, T - Trans Bridge, B - Source Route Bridge\n";
+        output += "                  S - Switch, H - Host, I - IGMP, r - Repeater\n\n";
+        output += "Device ID        Local Intrfce     Holdtme    Capability  Platform  Port ID\n";
+
+        var ports = _sw.GetComponentsInChildren<Port>(true);
+        bool any = false;
+
+        foreach (var p in ports)
+        {
+            if (p == null || !p.IsConnected || p.connectedTo == null) continue;
+            if (p.medium != PortMedium.Ethernet) continue;
+
+            var remote = p.connectedTo;
+            if (remote.owner == null) continue;
+
+            string deviceId = remote.owner.deviceName ?? remote.owner.name;
+            string localIf = SwitchDevice.ShortIfName(p.interfaceName ?? p.portName ?? "?");
+            string remoteIf = SwitchDevice.ShortIfName(remote.interfaceName ?? remote.portName ?? "?");
+            string capability = (remote.owner is RouterDevice) ? "R" : (remote.owner is SwitchDevice) ? "S" : "H";
+            string platform = (remote.owner is RouterDevice) ? "cisco ISR" : (remote.owner is SwitchDevice) ? "cisco WS-C" : "cisco";
+
+            output += $"{deviceId,-17}{localIf,-18}{"120",-11}{capability,-12}{platform,-10}{remoteIf}\n";
+            any = true;
+        }
+
+        if (!any) output += "(No CDP neighbors found)\n";
         return output.TrimEnd('\n');
     }
 }

@@ -18,6 +18,7 @@ public static class SwitchConfigSerializer
         if (s.stpPriority != 32768)
             sb.AppendLine($"spanning-tree vlan 1 priority {s.stpPriority}");
 
+        AppendConsole(sb, s);
         AppendVlans(sb, s);
         AppendManagementSvi(sb, s);
         AppendPorts(sb, s);
@@ -26,6 +27,17 @@ public static class SwitchConfigSerializer
         sb.AppendLine("write memory");
 
         return sb.ToString();
+    }
+
+    static void AppendConsole(StringBuilder sb, SwitchDevice s)
+    {
+        if (!s.consoleLoginEnabled && string.IsNullOrWhiteSpace(s.consolePassword)) return;
+        sb.AppendLine("line console 0");
+        if (!string.IsNullOrWhiteSpace(s.consolePassword))
+            sb.AppendLine($" password {s.consolePassword}");
+        if (s.consoleLoginEnabled) sb.AppendLine(" login");
+        else sb.AppendLine(" no login");
+        sb.AppendLine(" exit");
     }
 
     static void AppendVlans(StringBuilder sb, SwitchDevice s)
@@ -71,6 +83,13 @@ public static class SwitchConfigSerializer
 
             sb.AppendLine($"interface {p.name}");
 
+            if (!string.IsNullOrWhiteSpace(p.description))
+                sb.AppendLine($" description {p.description}");
+
+            if (p.speed > 0) sb.AppendLine($" speed {p.speed}");
+            if (!string.IsNullOrWhiteSpace(p.duplex) && p.duplex != "auto")
+                sb.AppendLine($" duplex {p.duplex}");
+
             if (p.mode == SwitchportMode.Access)
             {
                 sb.AppendLine(" switchport mode access");
@@ -97,6 +116,20 @@ public static class SwitchConfigSerializer
 
                 if (!string.IsNullOrWhiteSpace(mode))
                     sb.AppendLine($" channel-group {p.channelGroup} mode {mode}");
+            }
+
+            if (p.portSecurityEnabled)
+            {
+                sb.AppendLine(" switchport port-security");
+                if (p.portSecurityMaxMac != 1)
+                    sb.AppendLine($" switchport port-security maximum {p.portSecurityMaxMac}");
+                if (!string.IsNullOrWhiteSpace(p.portSecurityViolation) && p.portSecurityViolation != "shutdown")
+                    sb.AppendLine($" switchport port-security violation {p.portSecurityViolation}");
+                if (p.portSecuritySticky)
+                    sb.AppendLine(" switchport port-security mac-address sticky");
+                if (p.portSecurityStickyMacs != null)
+                    foreach (var mac in p.portSecurityStickyMacs)
+                        sb.AppendLine($" switchport port-security mac-address {mac}");
             }
 
             if (p.adminUp) sb.AppendLine(" no shutdown");

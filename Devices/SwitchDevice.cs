@@ -52,6 +52,20 @@ public class SwitchPortConfig
     public int channelGroup = 0;
     public EtherChannelMode channelMode = EtherChannelMode.None;
     [HideInInspector] public bool channelSuspended = false;
+
+    [Header("Port Config")]
+    public string description = "";
+    public int speed = 0;        // 0 = auto
+    public string duplex = "auto";
+
+    [Header("Port Security")]
+    public bool portSecurityEnabled = false;
+    public int portSecurityMaxMac = 1;
+    public string portSecurityViolation = "shutdown"; // protect | restrict | shutdown
+    public bool portSecuritySticky = false;
+    public List<string> portSecurityStickyMacs = new List<string>();
+    public int portSecurityViolationCount = 0;
+    public bool portSecurityShutdown = false; // true if port was err-disabled by violation
 }
 
 [System.Serializable]
@@ -119,6 +133,10 @@ public class SwitchDevice : Device
 
     [HideInInspector] public bool IsRootBridge = false;
     [HideInInspector] public SwitchDevice CurrentRoot;
+
+    [Header("Console (line console 0)")]
+    public bool consoleLoginEnabled = false;
+    public string consolePassword = "";
 
     [Header("Management SVI")]
     public int managementVlanId = 1;
@@ -624,7 +642,7 @@ public class SwitchDevice : Device
         return full;
     }
 
-    private string GetBridgeMac()
+    public string GetBridgeMac()
     {
 
         string n = deviceName ?? name ?? "Switch";

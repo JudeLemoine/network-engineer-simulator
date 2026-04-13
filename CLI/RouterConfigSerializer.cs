@@ -15,6 +15,29 @@ public static class RouterConfigSerializer
         string host = !string.IsNullOrWhiteSpace(r.deviceName) ? r.deviceName : r.gameObject.name;
         sb.AppendLine($"hostname {host}");
 
+        if (!string.IsNullOrWhiteSpace(r.bannerMotd))
+            sb.AppendLine($"banner motd #{r.bannerMotd}#");
+
+        if (r.servicePasswordEncryption)
+            sb.AppendLine("service password-encryption");
+
+        if (!r.domainLookupEnabled)
+            sb.AppendLine("no ip domain-lookup");
+
+        if (!string.IsNullOrWhiteSpace(r.nameServer))
+            sb.AppendLine($"ip name-server {r.nameServer}");
+
+        if (!string.IsNullOrWhiteSpace(r.enableSecret))
+        {
+            string pw = r.servicePasswordEncryption ? $"7 {Encrypt(r.enableSecret)}" : r.enableSecret;
+            sb.AppendLine($"enable secret {pw}");
+        }
+        else if (!string.IsNullOrWhiteSpace(r.enablePassword))
+        {
+            string pw = r.servicePasswordEncryption ? $"7 {Encrypt(r.enablePassword)}" : r.enablePassword;
+            sb.AppendLine($"enable password {pw}");
+        }
+
         AppendInterfaces(sb, r);
         AppendInterfaceNat(sb, r);
         AppendInterfaceAcls(sb, r);
@@ -43,6 +66,9 @@ public static class RouterConfigSerializer
             if (string.IsNullOrWhiteSpace(itf.name)) continue;
 
             sb.AppendLine($"interface {itf.name}");
+
+            if (!string.IsNullOrWhiteSpace(itf.description))
+                sb.AppendLine($" description {itf.description}");
 
             if (!string.IsNullOrWhiteSpace(itf.ipAddress) &&
                 !itf.ipAddress.Equals(NetworkUtils.UnassignedIp, StringComparison.OrdinalIgnoreCase) &&
@@ -249,8 +275,11 @@ public static class RouterConfigSerializer
 
         if (r.consoleLoginEnabled)
         {
-            if (!string.IsNullOrWhiteSpace(r.consolePassword))
-                sb.AppendLine($" password {r.consolePassword}");
+            string pw = r.servicePasswordEncryption
+                ? $"7 {Encrypt(r.consolePassword)}"
+                : r.consolePassword;
+            if (!string.IsNullOrWhiteSpace(pw))
+                sb.AppendLine($" password {pw}");
             sb.AppendLine(" login");
         }
         else
@@ -259,5 +288,30 @@ public static class RouterConfigSerializer
         }
 
         sb.AppendLine(" exit");
+
+        if (r.vtyLoginEnabled || !string.IsNullOrWhiteSpace(r.vtyPassword))
+        {
+            sb.AppendLine("line vty 0 4");
+            if (!string.IsNullOrWhiteSpace(r.vtyPassword))
+            {
+                string pw = r.servicePasswordEncryption
+                    ? $"7 {Encrypt(r.vtyPassword)}"
+                    : r.vtyPassword;
+                sb.AppendLine($" password {pw}");
+            }
+            if (r.vtyLoginEnabled) sb.AppendLine(" login");
+            else sb.AppendLine(" no login");
+            sb.AppendLine(" exit");
+        }
+    }
+
+    // Trivial Cisco type-7 simulation (just reversal for display; not real Cisco encryption)
+    static string Encrypt(string plain)
+    {
+        if (string.IsNullOrEmpty(plain)) return "00";
+        var bytes = System.Text.Encoding.ASCII.GetBytes(plain);
+        var sb2 = new StringBuilder();
+        foreach (var b in bytes) sb2.Append((b ^ 0x15).ToString("X2"));
+        return sb2.ToString();
     }
 }

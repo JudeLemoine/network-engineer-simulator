@@ -15,6 +15,7 @@ public class RouterInterface
     public bool isSubinterface = false;
     public string parent = "";
     public int dot1qVlan = -1;
+    public string description = "";
 
 [System.Serializable]
 public class StaticRoute
@@ -221,6 +222,21 @@ public class RouterDevice : Device
     [Header("Console (line console 0)")]
     public bool consoleLoginEnabled = false;
     public string consolePassword = "cisco";
+
+    [Header("VTY (line vty 0 4)")]
+    public bool vtyLoginEnabled = false;
+    public string vtyPassword = "";
+
+    [Header("Enable Password")]
+    public string enableSecret = "";
+    public string enablePassword = "";
+
+    [Header("Global Settings")]
+    public bool servicePasswordEncryption = false;
+    public bool domainLookupEnabled = true;
+    public string nameServer = "";
+    public string bannerMotd = "";
+    public string clockOffset = ""; // stored as "HH:mm:ss DD MMM YYYY"
 
     public List<DhcpPool> dhcpPools = new List<DhcpPool>();
     public List<DhcpExcludedRange> dhcpExcludedAddresses = new List<DhcpExcludedRange>();

@@ -28,6 +28,9 @@ public class IosSession : ITerminalSession
     public IosMode Mode { get; private set; } = IosMode.UserExec;
 
     private bool _awaitingConsolePassword = false;
+    private bool _awaitingEnablePassword = false;
+    // true when LineConsoleConfig is actually configuring VTY lines
+    private bool _lineIsVty = false;
 
     public IosSession(RouterDevice router)
     {
@@ -45,7 +48,7 @@ public class IosSession : ITerminalSession
     {
         get
         {
-            if (_awaitingConsolePassword)
+            if (_awaitingConsolePassword || _awaitingEnablePassword)
                 return "Password:";
 
             return Mode switch
@@ -97,8 +100,38 @@ public class IosSession : ITerminalSession
         if (input.Equals("sh ip nat st", StringComparison.OrdinalIgnoreCase)) input = "show ip nat statistics";
         if (input.Equals("sh ip ro", StringComparison.OrdinalIgnoreCase)) input = "show ip route";
 
+        if (_awaitingEnablePassword)
+        {
+            if (string.IsNullOrEmpty(input)) return "";
+
+            string required = (!string.IsNullOrWhiteSpace(_router?.enableSecret))
+                ? _router.enableSecret
+                : (_router?.enablePassword ?? "");
+
+            if (input == required)
+            {
+                _awaitingEnablePassword = false;
+                Mode = IosMode.PrivExec;
+                return "";
+            }
+            _awaitingEnablePassword = false;
+            return "% Bad passwords";
+        }
+
         if (input.Equals("enable", StringComparison.OrdinalIgnoreCase))
         {
+            if (_router != null)
+            {
+                string required = !string.IsNullOrWhiteSpace(_router.enableSecret)
+                    ? _router.enableSecret
+                    : _router.enablePassword;
+
+                if (!string.IsNullOrWhiteSpace(required))
+                {
+                    _awaitingEnablePassword = true;
+                    return "Password:";
+                }
+            }
             Mode = IosMode.PrivExec;
             return "";
         }
@@ -153,6 +186,7 @@ public class IosSession : ITerminalSession
             if (Mode == IosMode.LineConsoleConfig)
             {
                 Mode = IosMode.GlobalConfig;
+                _lineIsVty = false;
                 return "";
             }
 
@@ -178,7 +212,88 @@ public class IosSession : ITerminalSession
 
         if (Mode == IosMode.GlobalConfig && input.Equals("line console 0", StringComparison.OrdinalIgnoreCase))
         {
+            _lineIsVty = false;
             Mode = IosMode.LineConsoleConfig;
+            return "";
+        }
+
+        if (Mode == IosMode.GlobalConfig && (
+            input.StartsWith("line vty ", StringComparison.OrdinalIgnoreCase)))
+        {
+            _lineIsVty = true;
+            Mode = IosMode.LineConsoleConfig;
+            return "";
+        }
+
+        if (Mode == IosMode.GlobalConfig && (
+            input.StartsWith("enable secret ", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_router == null) return "% Device not ready.";
+            _router.enableSecret = input.Substring("enable secret ".Length).Trim();
+            return "";
+        }
+
+        if (Mode == IosMode.GlobalConfig && (
+            input.StartsWith("enable password ", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_router == null) return "% Device not ready.";
+            _router.enablePassword = input.Substring("enable password ".Length).Trim();
+            return "";
+        }
+
+        if (Mode == IosMode.GlobalConfig && (
+            input.Equals("service password-encryption", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_router == null) return "% Device not ready.";
+            _router.servicePasswordEncryption = true;
+            return "";
+        }
+
+        if (Mode == IosMode.GlobalConfig && (
+            input.Equals("no service password-encryption", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_router == null) return "% Device not ready.";
+            _router.servicePasswordEncryption = false;
+            return "";
+        }
+
+        if (Mode == IosMode.GlobalConfig && (
+            input.Equals("no ip domain-lookup", StringComparison.OrdinalIgnoreCase) ||
+            input.Equals("no ip domain lookup", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_router == null) return "% Device not ready.";
+            _router.domainLookupEnabled = false;
+            return "";
+        }
+
+        if (Mode == IosMode.GlobalConfig && (
+            input.Equals("ip domain-lookup", StringComparison.OrdinalIgnoreCase) ||
+            input.Equals("ip domain lookup", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_router == null) return "% Device not ready.";
+            _router.domainLookupEnabled = true;
+            return "";
+        }
+
+        if (Mode == IosMode.GlobalConfig && input.StartsWith("ip name-server ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            string ip = input.Substring("ip name-server ".Length).Trim();
+            if (!TryParseIPv4(ip, out _)) return "% Invalid IP address.";
+            _router.nameServer = ip;
+            return "";
+        }
+
+        if (Mode == IosMode.GlobalConfig && input.StartsWith("banner motd ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            // banner motd #<message># — grab everything after the delimiter
+            string rest = input.Substring("banner motd ".Length);
+            if (rest.Length < 2) return "% Incomplete command.";
+            char delim = rest[0];
+            string inner = rest.Substring(1);
+            int end = inner.IndexOf(delim);
+            _router.bannerMotd = end >= 0 ? inner.Substring(0, end) : inner;
             return "";
         }
 
@@ -188,19 +303,23 @@ public class IosSession : ITerminalSession
 
             if (input.StartsWith("password ", StringComparison.OrdinalIgnoreCase))
             {
-                _router.consolePassword = input.Substring("password ".Length);
+                string pw = input.Substring("password ".Length);
+                if (_lineIsVty) _router.vtyPassword = pw;
+                else _router.consolePassword = pw;
                 return "";
             }
 
             if (input.Equals("login", StringComparison.OrdinalIgnoreCase))
             {
-                _router.consoleLoginEnabled = true;
+                if (_lineIsVty) _router.vtyLoginEnabled = true;
+                else _router.consoleLoginEnabled = true;
                 return "";
             }
 
             if (input.Equals("no login", StringComparison.OrdinalIgnoreCase))
             {
-                _router.consoleLoginEnabled = false;
+                if (_lineIsVty) _router.vtyLoginEnabled = false;
+                else _router.consoleLoginEnabled = false;
                 return "";
             }
 
@@ -709,6 +828,18 @@ if (Mode == IosMode.InterfaceConfig)
                 _router.SetNatOutside(_currentIf.name, false);
                 return "";
             }
+
+            if (input.StartsWith("description ", StringComparison.OrdinalIgnoreCase))
+            {
+                _currentIf.description = input.Substring("description ".Length);
+                return "";
+            }
+
+            if (input.Equals("no description", StringComparison.OrdinalIgnoreCase))
+            {
+                _currentIf.description = "";
+                return "";
+            }
         }
 
         
@@ -961,6 +1092,59 @@ if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
             return DoRouterPing(target);
         }
 
+        if (Mode == IosMode.PrivExec &&
+            (input.StartsWith("traceroute ", StringComparison.OrdinalIgnoreCase) ||
+             input.StartsWith("tracert ", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_router == null) return "% Device not ready.";
+            string target = input.StartsWith("traceroute ", StringComparison.OrdinalIgnoreCase)
+                ? input.Substring("traceroute ".Length).Trim()
+                : input.Substring("tracert ".Length).Trim();
+            return DoRouterTraceroute(target);
+        }
+
+        if (Mode == IosMode.PrivExec &&
+            input.StartsWith("clock set ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            string rest = input.Substring("clock set ".Length).Trim();
+            _router.clockOffset = rest;
+            return "";
+        }
+
+        if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
+            input.Equals("show version", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            return BuildShowVersion();
+        }
+
+        if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
+            (input.Equals("show interfaces", StringComparison.OrdinalIgnoreCase) ||
+             input.Equals("show int", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_router == null) return "% Device not ready.";
+            return BuildShowInterfaces();
+        }
+
+        if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
+            (input.Equals("show cdp neighbors", StringComparison.OrdinalIgnoreCase) ||
+             input.Equals("show cdp nei", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_router == null) return "% Device not ready.";
+            return BuildShowCdpNeighbors();
+        }
+
+        if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
+            input.Equals("show clock", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            string clk = !string.IsNullOrWhiteSpace(_router.clockOffset)
+                ? _router.clockOffset
+                : DateTime.UtcNow.ToString("HH:mm:ss.ff") + " UTC";
+            return clk;
+        }
+
         return "% Invalid input detected at '^' marker.";
     }
 
@@ -1038,6 +1222,171 @@ if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
             $"Sending 5, 100-byte ICMP Echos to {targetIp}, timeout is 2 seconds:\n" +
             $"!!!!!\n" +
             $"Success rate is 100 percent (5/5), round-trip min/avg/max = 1/2/4 ms";
+    }
+
+    private string BuildShowVersion()
+    {
+        string model = (Hostname.ToLower().Contains("1841") || _router.gameObject.name.ToLower().Contains("1841"))
+            ? "Cisco 1841 (revision 1.0)"
+            : "Cisco ISR 2911 (revision 1.0)";
+        string ios = "Version 15.1(4)M12a, RELEASE SOFTWARE (fc1)";
+        string uptime = $"{Mathf.FloorToInt(Time.time / 3600)}h {Mathf.FloorToInt((Time.time % 3600) / 60)}m";
+
+        string clk = !string.IsNullOrWhiteSpace(_router.clockOffset)
+            ? _router.clockOffset
+            : DateTime.UtcNow.ToString("HH:mm:ss") + " UTC";
+
+        string output = "";
+        output += $"Cisco IOS Software, {ios}\n";
+        output += $"Technical Support: http://www.cisco.com/techsupport\n\n";
+        output += $"{model}\n";
+        output += $"{Hostname} uptime is {uptime}\n";
+        output += $"System returned to ROM by reload at {clk}\n\n";
+        output += $"ROM: System Bootstrap, Version 12.4(13r)T, RELEASE SOFTWARE\n\n";
+        output += $"cisco 2911 (revision 1.0) with 483328K/40960K bytes of memory.\n";
+        output += $"Processor board ID FTX152400MY\n\n";
+
+        int physCount = 0;
+        foreach (var itf in _router.interfaces)
+            if (itf != null && !itf.isSubinterface) physCount++;
+        output += $"{physCount} Gigabit Ethernet interfaces\n";
+        output += $"1 terminal line\n";
+        output += $"DRAM configuration is 64 bits wide with parity disabled.\n";
+        output += $"255K bytes of non-volatile configuration memory.\n";
+        output += $"249856K bytes of ATA System CompactFlash (Read/Write)\n\n";
+        output += $"Configuration register is 0x2102";
+        return output;
+    }
+
+    private string BuildShowInterfaces()
+    {
+        _router.RefreshProtocolStates();
+        string output = "";
+
+        foreach (var itf in _router.interfaces)
+        {
+            if (itf == null) continue;
+            string status = itf.adminUp ? "is up" : "is administratively down";
+            string proto = itf.protocolUp ? "is up" : "is down";
+            string ip = (string.IsNullOrWhiteSpace(itf.ipAddress) || itf.ipAddress == NetworkUtils.UnassignedIp)
+                ? "unassigned" : $"{itf.ipAddress}/{MaskToCidr(itf.subnetMask)}";
+            string desc = !string.IsNullOrWhiteSpace(itf.description) ? $"\n  Description: {itf.description}" : "";
+
+            output += $"{itf.name} {status}, line protocol {proto}{desc}\n";
+            output += $"  Internet address is {ip}\n";
+            output += $"  MTU 1500 bytes, BW 1000000 Kbit/sec, DLY 10 usec,\n";
+            output += $"     reliability 255/255, txload 1/255, rxload 1/255\n";
+            output += $"  Encapsulation ARPA, loopback not set\n";
+            output += $"  Keepalive set (10 sec)\n";
+            output += $"  Full-duplex, 1000Mb/s, media type is RJ45\n";
+            output += $"  Input queue: 0/75/0/0 (size/max/drops/flushes); Total output drops: 0\n";
+            output += $"  5 minute input rate 0 bits/sec, 0 packets/sec\n";
+            output += $"  5 minute output rate 0 bits/sec, 0 packets/sec\n";
+            output += $"     0 packets input, 0 bytes, 0 no buffer\n";
+            output += $"     0 packets output, 0 bytes, 0 underruns\n\n";
+        }
+
+        return output.TrimEnd('\n');
+    }
+
+    private static int MaskToCidr(string mask)
+    {
+        if (!RouterDevice.TryParseIPv4(mask, out uint m)) return 0;
+        int bits = 0;
+        for (int i = 31; i >= 0; i--)
+            if (((m >> i) & 1u) == 1u) bits++;
+        return bits;
+    }
+
+    private string BuildShowCdpNeighbors()
+    {
+        string output = "Capability Codes: R - Router, T - Trans Bridge, B - Source Route Bridge\n";
+        output += "                  S - Switch, H - Host, I - IGMP, r - Repeater\n\n";
+        output += $"Device ID        Local Intrfce     Holdtme    Capability  Platform  Port ID\n";
+
+        var ports = _router.GetComponentsInChildren<Port>(true);
+        bool any = false;
+
+        foreach (var p in ports)
+        {
+            if (p == null || !p.IsConnected || p.connectedTo == null) continue;
+            if (p.medium != PortMedium.Ethernet) continue;
+
+            var remote = p.connectedTo;
+            if (remote.owner == null) continue;
+
+            string deviceId = remote.owner.deviceName ?? remote.owner.name;
+            string localIf = RouterDevice.NormalizeInterfaceName(p.interfaceName ?? p.portName ?? "?");
+            string remoteIf = RouterDevice.NormalizeInterfaceName(remote.interfaceName ?? remote.portName ?? "?");
+            string capability = (remote.owner is RouterDevice) ? "R" : (remote.owner is SwitchDevice) ? "S" : "H";
+            string platform = (remote.owner is RouterDevice) ? "cisco ISR" : (remote.owner is SwitchDevice) ? "cisco WS-C" : "cisco";
+
+            output += $"{deviceId,-17}{localIf,-18}{"120",-11}{capability,-12}{platform,-10}{remoteIf}\n";
+            any = true;
+        }
+
+        if (!any) output += "(No CDP neighbors found)\n";
+        return output.TrimEnd('\n');
+    }
+
+    private string DoRouterTraceroute(string targetIp)
+    {
+        if (!TryParseIPv4(targetIp, out uint dstIp))
+            return $"% Invalid IP address: {targetIp}";
+
+        string header = $"Type escape sequence to abort.\n" +
+                        $"Tracing the route to {targetIp}\n" +
+                        $"VRF info: (vrf in name/id, vrf out name/id)\n";
+
+        // Build hop list by following the routing table
+        var hops = new List<string>();
+        var visited = new HashSet<int>();
+
+        RouterDevice current = _router;
+        int maxHops = 15;
+
+        for (int hop = 1; hop <= maxHops; hop++)
+        {
+            if (current == null || !current.TryRoute(dstIp, out RouterInterface egress, out string nextHopIp))
+                break;
+
+            // Direct delivery
+            if (string.Equals(nextHopIp, targetIp, StringComparison.OrdinalIgnoreCase) ||
+                (TryParseIPv4(nextHopIp, out uint nhIp) && current.TryGetBestConnectedInterface(dstIp, out _)))
+            {
+                // Destination is directly reachable from current router's egress
+                hops.Add($"  {hop}  {targetIp}  1 msec  1 msec  2 msec");
+                break;
+            }
+
+            hops.Add($"  {hop}  {nextHopIp}  1 msec  1 msec  2 msec");
+
+            // Advance to next-hop router
+            int rid = current.GetInstanceID();
+            if (visited.Contains(rid)) break;
+            visited.Add(rid);
+
+            var allRouters = UnityEngine.Object.FindObjectsOfType<RouterDevice>(true);
+            RouterDevice nhRouter = null;
+            foreach (var r in allRouters)
+            {
+                if (r == null || !r.IsPoweredOn) continue;
+                foreach (var itf in r.interfaces)
+                {
+                    if (itf != null && string.Equals(itf.ipAddress, nextHopIp, StringComparison.OrdinalIgnoreCase))
+                    { nhRouter = r; break; }
+                }
+                if (nhRouter != null) break;
+            }
+
+            if (nhRouter == null) break;
+            current = nhRouter;
+        }
+
+        if (hops.Count == 0)
+            return header + "  1  * * * (no route to host)";
+
+        return header + string.Join("\n", hops);
     }
 
     private static List<DhcpLease> CollectAllDhcpLeases(RouterDevice router)

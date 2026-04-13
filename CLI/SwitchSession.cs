@@ -9,6 +9,7 @@ public class SwitchSession : ITerminalSession
     private SwitchPortConfig _currentPort;
     private SwitchPortChannelConfig _currentPortChannel;
     private List<SwitchPortConfig> _rangePorts;
+    private int _currentSviVlan = -1;
 
     private IosMode _mode = IosMode.UserExec;
 
@@ -25,6 +26,7 @@ public class SwitchSession : ITerminalSession
                 IosMode.PrivExec => $"{host}#",
                 IosMode.GlobalConfig => $"{host}(config)#",
                 IosMode.InterfaceConfig => $"{host}(config-if)#",
+                IosMode.SviConfig => $"{host}(config-if)#",
                 _ => $"{host}>"
             };
         }
@@ -184,6 +186,25 @@ public class SwitchSession : ITerminalSession
                 _currentPort = null;
                 _rangePorts = null;
                 _mode = IosMode.InterfaceConfig;
+                return "";
+            }
+
+            if (input.StartsWith("interface vlan ", StringComparison.OrdinalIgnoreCase) ||
+                input.StartsWith("int vlan ", StringComparison.OrdinalIgnoreCase))
+            {
+                string idStr = input.StartsWith("interface vlan ", StringComparison.OrdinalIgnoreCase)
+                    ? input.Substring("interface vlan ".Length).Trim()
+                    : input.Substring("int vlan ".Length).Trim();
+
+                if (!int.TryParse(idStr, out int vid) || !SwitchDevice.IsValidVlanId(vid))
+                    return "% Invalid VLAN id.";
+
+                _sw.EnsureVlan(vid);
+                _currentSviVlan = vid;
+                _currentPort = null;
+                _currentPortChannel = null;
+                _rangePorts = null;
+                _mode = IosMode.SviConfig;
                 return "";
             }
 
@@ -394,14 +415,73 @@ public class SwitchSession : ITerminalSession
             return "% Invalid input detected at '^' marker.";
         }
 
+        if (_mode == IosMode.SviConfig)
+        {
+            if (input.Equals("exit", StringComparison.OrdinalIgnoreCase))
+            {
+                _mode = IosMode.GlobalConfig;
+                _currentSviVlan = -1;
+                return "";
+            }
+
+            if (input.Equals("end", StringComparison.OrdinalIgnoreCase))
+            {
+                _mode = IosMode.PrivExec;
+                _currentSviVlan = -1;
+                return "";
+            }
+
+            if (_sw == null) return "% Device not ready.";
+            if (_currentSviVlan < 1) return "% No SVI selected.";
+
+            if (input.StartsWith("ip address ", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 4) return "% Incomplete command.";
+                if (!TryParseIPv4(parts[2], out _)) return "% Invalid IP address.";
+                if (!TryParseIPv4(parts[3], out _)) return "% Invalid subnet mask.";
+
+                _sw.managementVlanId = _currentSviVlan;
+                _sw.managementIp = parts[2];
+                _sw.managementMask = parts[3];
+                return "";
+            }
+
+            if (input.Equals("no ip address", StringComparison.OrdinalIgnoreCase))
+            {
+                _sw.managementIp = "";
+                _sw.managementMask = "";
+                return "";
+            }
+
+            if (input.Equals("no shutdown", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("no shut", StringComparison.OrdinalIgnoreCase))
+            {
+                _sw.managementAdminUp = true;
+                return "";
+            }
+
+            if (input.Equals("shutdown", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("shut", StringComparison.OrdinalIgnoreCase))
+            {
+                _sw.managementAdminUp = false;
+                return "";
+            }
+
+            return "% Invalid input detected at '^' marker.";
+        }
+
         return "% Invalid input detected at '^' marker.";
     }
+
+    private static bool TryParseIPv4(string ip, out uint value) => NetworkUtils.TryParseIPv4(ip, out value);
 
     private void ClearInterfaceContext()
     {
         _currentPort = null;
         _currentPortChannel = null;
         _rangePorts = null;
+        _currentSviVlan = -1;
     }
 
     private bool IsPortChannelContext() => _currentPortChannel != null;

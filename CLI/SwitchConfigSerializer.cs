@@ -19,6 +19,7 @@ public static class SwitchConfigSerializer
             sb.AppendLine($"spanning-tree vlan 1 priority {s.stpPriority}");
 
         AppendVlans(sb, s);
+        AppendManagementSvi(sb, s);
         AppendPorts(sb, s);
 
         sb.AppendLine("end");
@@ -44,6 +45,18 @@ public static class SwitchConfigSerializer
                 sb.AppendLine($" name {v.name}");
             sb.AppendLine(" exit");
         }
+    }
+
+    static void AppendManagementSvi(StringBuilder sb, SwitchDevice s)
+    {
+        if (string.IsNullOrWhiteSpace(s.managementIp)) return;
+
+        int vid = s.managementVlanId > 0 ? s.managementVlanId : 1;
+        sb.AppendLine($"interface vlan {vid}");
+        sb.AppendLine($" ip address {s.managementIp} {s.managementMask}");
+        if (s.managementAdminUp) sb.AppendLine(" no shutdown");
+        else sb.AppendLine(" shutdown");
+        sb.AppendLine(" exit");
     }
 
     static void AppendPorts(StringBuilder sb, SwitchDevice s)

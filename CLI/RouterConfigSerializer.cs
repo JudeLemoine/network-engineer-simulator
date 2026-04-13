@@ -109,6 +109,19 @@ public static class RouterConfigSerializer
 
     static void AppendDhcp(StringBuilder sb, RouterDevice r)
     {
+        if (r.dhcpExcludedAddresses != null)
+        {
+            foreach (var ex in r.dhcpExcludedAddresses)
+            {
+                if (ex == null || string.IsNullOrWhiteSpace(ex.low)) continue;
+                string h = string.IsNullOrWhiteSpace(ex.high) ? ex.low : ex.high;
+                if (string.Equals(ex.low, h, StringComparison.OrdinalIgnoreCase))
+                    sb.AppendLine($"ip dhcp excluded-address {ex.low}");
+                else
+                    sb.AppendLine($"ip dhcp excluded-address {ex.low} {h}");
+            }
+        }
+
         if (r.dhcpPools == null || r.dhcpPools.Count == 0) return;
 
         for (int i = 0; i < r.dhcpPools.Count; i++)

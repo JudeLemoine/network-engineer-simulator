@@ -171,6 +171,46 @@ if (input.Equals("ipconfig", StringComparison.OrdinalIgnoreCase))
             return "ARP cache cleared.";
         }
 
+        if (input.Equals("ipconfig /all", StringComparison.OrdinalIgnoreCase))
+        {
+            string mac = !string.IsNullOrWhiteSpace(_pc.macAddress) ? _pc.macAddress : "N/A";
+
+            string linkEth = "Disconnected";
+            string linkWifi = "Disconnected";
+            var ports = _pc.GetComponentsInChildren<Port>(true);
+            foreach (var p in ports)
+            {
+                if (p == null) continue;
+                if (p.medium == PortMedium.Ethernet)
+                    linkEth = (p.connectedTo != null) ? "Connected" : "Disconnected";
+                else if (p.medium == PortMedium.Wireless)
+                    linkWifi = (p.connectedTo != null) ? "Connected" : "Disconnected";
+            }
+
+            string dhcpStatus = _pc.dhcpEnabled ? "Yes" : "No";
+            string lease = !string.IsNullOrWhiteSpace(_pc.lastDhcpLease) ? _pc.lastDhcpLease : "N/A";
+
+            return
+                $"Windows IP Configuration\n\n" +
+                $"   Host Name  . . . . . . . . . . . . : {_pc.deviceName}\n\n" +
+                $"Ethernet adapter Local Area Connection:\n\n" +
+                $"   Physical Address. . . . . . . . . : {mac.Replace(':', '-')}\n" +
+                $"   DHCP Enabled. . . . . . . . . . . : {dhcpStatus}\n" +
+                $"   IP Address. . . . . . . . . . . . : {_pc.ipAddress}\n" +
+                $"   Subnet Mask . . . . . . . . . . . : {_pc.subnetMask}\n" +
+                $"   Default Gateway . . . . . . . . . : {_pc.defaultGateway}\n" +
+                $"   DNS Servers . . . . . . . . . . . : {_pc.dnsServer}\n" +
+                $"   DHCP Lease  . . . . . . . . . . . : {lease}\n" +
+                $"   Link (Ethernet) . . . . . . . . . : {linkEth}\n" +
+                $"   Link (Wireless) . . . . . . . . . : {linkWifi}";
+        }
+
+        if (input.StartsWith("nslookup ", StringComparison.OrdinalIgnoreCase))
+        {
+            string query = input.Substring("nslookup ".Length).Trim();
+            return DoNslookup(query);
+        }
+
         if (input.StartsWith("ping ", StringComparison.OrdinalIgnoreCase))
         {
             string target = input.Substring("ping ".Length).Trim();
@@ -191,8 +231,10 @@ if (input.Equals("ipconfig", StringComparison.OrdinalIgnoreCase))
             return
                 "Commands:\n" +
                 "  ipconfig\n" +
+                "  ipconfig /all\n" +
                 "  set ip <ip> <mask> [gw]\n" +
                 "  ping <ip>\n" +
+                "  nslookup <hostname>\n" +
                 "  arp -a\n" +
                 "  arp -d *\n" +
                 "  wifi help\n" +
@@ -509,6 +551,107 @@ if (input.Equals("ipconfig", StringComparison.OrdinalIgnoreCase))
         string banner2 = (svc2 != null && !string.IsNullOrWhiteSpace(svc2.banner)) ? $"\n{svc2.banner}" : "";
         return $"Connected to {targetIp} on port {port}.{banner2}";
     }
+    private string DoNslookup(string hostname)
+    {
+        if (string.IsNullOrWhiteSpace(hostname))
+            return "Usage: nslookup <hostname>";
+
+        string dnsServerIp = (_pc != null && !string.IsNullOrWhiteSpace(_pc.dnsServer) &&
+                              !_pc.dnsServer.Equals("0.0.0.0", StringComparison.OrdinalIgnoreCase))
+            ? _pc.dnsServer
+            : "";
+
+        string serverLine = string.IsNullOrWhiteSpace(dnsServerIp)
+            ? "Server:  (none)\nAddress:  0.0.0.0"
+            : $"Server:  {dnsServerIp}\nAddress:  {dnsServerIp}";
+
+        // If the query is already an IP, do a reverse lookup attempt
+        if (TryParseIPv4(hostname, out _))
+        {
+            string revName = ReverseLookup(hostname);
+            if (string.IsNullOrWhiteSpace(revName))
+                return $"{serverLine}\n\n*** {(string.IsNullOrWhiteSpace(dnsServerIp) ? "Default server" : dnsServerIp)} can't find {hostname}: Non-existent domain";
+
+            return $"{serverLine}\n\nName:    {revName}\nAddress: {hostname}";
+        }
+
+        // Forward lookup: search all devices for matching deviceName
+        string resolvedIp = ForwardLookup(hostname);
+        if (string.IsNullOrWhiteSpace(resolvedIp))
+            return $"{serverLine}\n\n*** {(string.IsNullOrWhiteSpace(dnsServerIp) ? "Default server" : dnsServerIp)} can't find {hostname}: Non-existent domain";
+
+        return $"{serverLine}\n\nName:    {hostname}\nAddress: {resolvedIp}";
+    }
+
+    private static string ForwardLookup(string hostname)
+    {
+        // Search PCs
+        var pcs = UnityEngine.Object.FindObjectsOfType<PcDevice>(true);
+        foreach (var pc in pcs)
+        {
+            if (pc == null) continue;
+            if (string.Equals(pc.deviceName, hostname, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(pc.ipAddress) && pc.ipAddress != "0.0.0.0")
+                return pc.ipAddress;
+        }
+
+        // Search router interfaces
+        var routers = UnityEngine.Object.FindObjectsOfType<RouterDevice>(true);
+        foreach (var r in routers)
+        {
+            if (r == null) continue;
+            if (!string.Equals(r.deviceName, hostname, StringComparison.OrdinalIgnoreCase)) continue;
+            foreach (var itf in r.interfaces)
+            {
+                if (itf != null && !string.IsNullOrWhiteSpace(itf.ipAddress) &&
+                    itf.ipAddress != "0.0.0.0" && itf.ipAddress != NetworkUtils.UnassignedIp)
+                    return itf.ipAddress;
+            }
+        }
+
+        // Search switches (management IP)
+        var switches = UnityEngine.Object.FindObjectsOfType<SwitchDevice>(true);
+        foreach (var sw in switches)
+        {
+            if (sw == null) continue;
+            if (string.Equals(sw.deviceName, hostname, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(sw.managementIp) && sw.managementIp != "0.0.0.0")
+                return sw.managementIp;
+        }
+
+        return null;
+    }
+
+    private static string ReverseLookup(string ip)
+    {
+        var pcs = UnityEngine.Object.FindObjectsOfType<PcDevice>(true);
+        foreach (var pc in pcs)
+        {
+            if (pc != null && string.Equals(pc.ipAddress, ip, StringComparison.OrdinalIgnoreCase))
+                return pc.deviceName;
+        }
+
+        var routers = UnityEngine.Object.FindObjectsOfType<RouterDevice>(true);
+        foreach (var r in routers)
+        {
+            if (r == null) continue;
+            foreach (var itf in r.interfaces)
+            {
+                if (itf != null && string.Equals(itf.ipAddress, ip, StringComparison.OrdinalIgnoreCase))
+                    return r.deviceName;
+            }
+        }
+
+        var switches = UnityEngine.Object.FindObjectsOfType<SwitchDevice>(true);
+        foreach (var sw in switches)
+        {
+            if (sw != null && string.Equals(sw.managementIp, ip, StringComparison.OrdinalIgnoreCase))
+                return sw.deviceName;
+        }
+
+        return null;
+    }
+
     private string DoPing(string targetIp)
     {
         if (_pc == null) return BuildPingFail(targetIp);

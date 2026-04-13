@@ -120,6 +120,12 @@ public class SwitchDevice : Device
     [HideInInspector] public bool IsRootBridge = false;
     [HideInInspector] public SwitchDevice CurrentRoot;
 
+    [Header("Management SVI")]
+    public int managementVlanId = 1;
+    public string managementIp = "";
+    public string managementMask = "";
+    public bool managementAdminUp = false;
+
     [Header("EtherChannel (Port-Channels)")]
     public List<SwitchPortChannelConfig> portChannels = new List<SwitchPortChannelConfig>();
 

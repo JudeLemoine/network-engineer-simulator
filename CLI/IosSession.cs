@@ -11,7 +11,8 @@ public enum IosMode
     DhcpPoolConfig,
     AclConfig,
     RouterOspfConfig,
-    LineConsoleConfig
+    LineConsoleConfig,
+    SviConfig
 }
 
 public class IosSession : ITerminalSession
@@ -271,6 +272,36 @@ public class IosSession : ITerminalSession
 
             bool removed = _router.RemoveStaticRoute(net, mask, nextHop, exitIf);
             return removed ? "" : "% Route not found.";
+        }
+
+        if (Mode == IosMode.GlobalConfig && input.StartsWith("ip dhcp excluded-address ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            string rest = input.Substring("ip dhcp excluded-address ".Length).Trim();
+            if (string.IsNullOrWhiteSpace(rest)) return "% Incomplete command.";
+
+            var parts = rest.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (!TryParseIPv4(parts[0], out _)) return "% Invalid IP address.";
+            string low = parts[0];
+            string high = (parts.Length >= 2 && TryParseIPv4(parts[1], out _)) ? parts[1] : low;
+
+            _router.AddDhcpExcludedRange(low, high);
+            return "";
+        }
+
+        if (Mode == IosMode.GlobalConfig && input.StartsWith("no ip dhcp excluded-address ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            string rest = input.Substring("no ip dhcp excluded-address ".Length).Trim();
+            if (string.IsNullOrWhiteSpace(rest)) return "% Incomplete command.";
+
+            var parts = rest.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (!TryParseIPv4(parts[0], out _)) return "% Invalid IP address.";
+            string low = parts[0];
+            string high = (parts.Length >= 2 && TryParseIPv4(parts[1], out _)) ? parts[1] : low;
+
+            bool removed = _router.RemoveDhcpExcludedRange(low, high);
+            return removed ? "" : "% Excluded range not found.";
         }
 
         if (Mode == IosMode.GlobalConfig && input.StartsWith("ip dhcp pool ", StringComparison.OrdinalIgnoreCase))
@@ -806,6 +837,30 @@ if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
         }
 
         if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
+            (input.Equals("show mac address-table", StringComparison.OrdinalIgnoreCase) ||
+             input.Equals("show mac-address-table", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_router == null) return "% Device not ready.";
+
+            _router.PurgeAgedMacs();
+            if (_router.macTable == null || _router.macTable.Count == 0)
+                return "Mac Address Table\n-----------------------------------------\nVlan    Mac Address       Type        Ports\n----    -----------       --------    -----\n(empty)";
+
+            string outp = "Mac Address Table\n-----------------------------------------\n";
+            outp += "Vlan    Mac Address       Type        Ports\n";
+            outp += "----    -----------       --------    -----\n";
+            foreach (var e in _router.macTable)
+            {
+                if (e == null) continue;
+                string shortIf = e.ifName.Length > 2 ? e.ifName : e.ifName;
+                // shorten interface name the Cisco way
+                string portShort = RouterDevice.NormalizeInterfaceName(e.ifName);
+                outp += $"{e.vlan.ToString().PadRight(8)}{e.mac.PadRight(18)}DYNAMIC     {portShort}\n";
+            }
+            return outp.TrimEnd('\n');
+        }
+
+        if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
             input.Equals("show ip nat translations", StringComparison.OrdinalIgnoreCase))
         {
             if (_router == null) return "% Device not ready.";
@@ -898,7 +953,91 @@ if ((Mode == IosMode.PrivExec || Mode == IosMode.UserExec) &&
             return outp.TrimEnd('\n');
         }
 
+        if (Mode == IosMode.PrivExec &&
+            input.StartsWith("ping ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_router == null) return "% Device not ready.";
+            string target = input.Substring("ping ".Length).Trim();
+            return DoRouterPing(target);
+        }
+
         return "% Invalid input detected at '^' marker.";
+    }
+
+    private string DoRouterPing(string targetIp)
+    {
+        if (_router == null) return $"% Ping error: device not ready.";
+        if (!TryParseIPv4(targetIp, out uint dstIp))
+            return $"% Invalid IP address: {targetIp}";
+
+        // Check direct connectivity first
+        bool directlyConnected = false;
+        RouterInterface egressIf = null;
+
+        if (_router.TryGetBestConnectedInterface(dstIp, out egressIf))
+            directlyConnected = true;
+
+        // If not directly connected, check routing table (static routes + OSPF)
+        if (!directlyConnected)
+        {
+            var bestRoute = _router.FindBestRoute(dstIp);
+            if (bestRoute != null)
+            {
+                egressIf = !string.IsNullOrWhiteSpace(bestRoute.exitInterface)
+                    ? _router.GetInterface(bestRoute.exitInterface)
+                    : null;
+                directlyConnected = false; // routed
+            }
+        }
+
+        if (egressIf == null && !directlyConnected)
+        {
+            // No route found
+            return
+                $"Type escape sequence to abort.\n" +
+                $"Sending 5, 100-byte ICMP Echos to {targetIp}, timeout is 2 seconds:\n" +
+                $".....\n" +
+                $"Success rate is 0 percent (0/5)";
+        }
+
+        // Find destination device in scene
+        var allPcs = UnityEngine.Object.FindObjectsOfType<PcDevice>(true);
+        bool found = false;
+        foreach (var pc in allPcs)
+        {
+            if (pc != null && string.Equals(pc.ipAddress, targetIp, StringComparison.OrdinalIgnoreCase))
+            { found = true; break; }
+        }
+        if (!found)
+        {
+            // Also check router interfaces
+            var allRouters = UnityEngine.Object.FindObjectsOfType<RouterDevice>(true);
+            foreach (var r in allRouters)
+            {
+                if (r == null) continue;
+                foreach (var itf in r.interfaces)
+                {
+                    if (itf != null && string.Equals(itf.ipAddress, targetIp, StringComparison.OrdinalIgnoreCase))
+                    { found = true; break; }
+                }
+                if (found) break;
+            }
+        }
+
+        if (!found)
+        {
+            return
+                $"Type escape sequence to abort.\n" +
+                $"Sending 5, 100-byte ICMP Echos to {targetIp}, timeout is 2 seconds:\n" +
+                $".....\n" +
+                $"Success rate is 0 percent (0/5)";
+        }
+
+        return
+            $"Type escape sequence to abort.\n" +
+            $"Sending 5, 100-byte ICMP Echos to {targetIp}, timeout is 2 seconds:\n" +
+            $"!!!!!\n" +
+            $"Success rate is 100 percent (5/5), round-trip min/avg/max = 1/2/4 ms";
     }
 
     private static List<DhcpLease> CollectAllDhcpLeases(RouterDevice router)

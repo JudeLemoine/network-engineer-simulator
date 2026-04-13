@@ -63,6 +63,13 @@ public class DhcpPool
     }
 }
 
+[System.Serializable]
+public class DhcpExcludedRange
+{
+    public string low;
+    public string high; // same as low for single-host exclusion
+}
+
 public enum AclAction { Permit, Deny }
 public enum AclProtocol { Ip, Icmp, Tcp, Udp }
 
@@ -216,6 +223,7 @@ public class RouterDevice : Device
     public string consolePassword = "cisco";
 
     public List<DhcpPool> dhcpPools = new List<DhcpPool>();
+    public List<DhcpExcludedRange> dhcpExcludedAddresses = new List<DhcpExcludedRange>();
 
     public List<ExtendedAcl> acls = new List<ExtendedAcl>();
 
@@ -748,6 +756,54 @@ public class RouterDevice : Device
         return false;
     }
 
+    private bool IsIpDhcpExcluded(string ip)
+    {
+        if (dhcpExcludedAddresses == null || string.IsNullOrWhiteSpace(ip)) return false;
+        if (!TryParseIPv4(ip, out uint target)) return false;
+
+        foreach (var ex in dhcpExcludedAddresses)
+        {
+            if (ex == null) continue;
+            if (!TryParseIPv4(ex.low, out uint low)) continue;
+            string highStr = string.IsNullOrWhiteSpace(ex.high) ? ex.low : ex.high;
+            if (!TryParseIPv4(highStr, out uint high)) continue;
+            if (target >= low && target <= high) return true;
+        }
+        return false;
+    }
+
+    public void AddDhcpExcludedRange(string low, string high)
+    {
+        if (dhcpExcludedAddresses == null) dhcpExcludedAddresses = new List<DhcpExcludedRange>();
+        string h = string.IsNullOrWhiteSpace(high) ? low : high;
+        // avoid duplicates
+        foreach (var ex in dhcpExcludedAddresses)
+        {
+            if (string.Equals(ex.low, low, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(ex.high, h, StringComparison.OrdinalIgnoreCase))
+                return;
+        }
+        dhcpExcludedAddresses.Add(new DhcpExcludedRange { low = low, high = h });
+    }
+
+    public bool RemoveDhcpExcludedRange(string low, string high)
+    {
+        if (dhcpExcludedAddresses == null) return false;
+        string h = string.IsNullOrWhiteSpace(high) ? low : high;
+        for (int i = dhcpExcludedAddresses.Count - 1; i >= 0; i--)
+        {
+            var ex = dhcpExcludedAddresses[i];
+            if (ex == null) { dhcpExcludedAddresses.RemoveAt(i); continue; }
+            if (string.Equals(ex.low, low, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(ex.high, h, StringComparison.OrdinalIgnoreCase))
+            {
+                dhcpExcludedAddresses.RemoveAt(i);
+                return true;
+            }
+        }
+        return false;
+    }
+
     private bool TryAllocateFromPool(DhcpPool pool, string mac, uint net, uint mask, out DhcpLease lease)
     {
         lease = null;
@@ -768,6 +824,7 @@ public class RouterDevice : Device
 
             string ip = IPv4ToString(candidate);
             if (used.Contains(ip)) continue;
+            if (IsIpDhcpExcluded(ip)) continue;
 
             var l = new DhcpLease
             {
@@ -1358,6 +1415,33 @@ public class RouterDevice : Device
         byte b3 = (byte)((value >> 8) & 0xFF);
         byte b4 = (byte)(value & 0xFF);
         return $"{b1}.{b2}.{b3}.{b4}";
+    }
+
+    // Returns the best matching static route for a destination IP, or null if none.
+    public StaticRoute FindBestRoute(uint dstIp)
+    {
+        if (staticRoutes == null) return null;
+
+        StaticRoute best = null;
+        int bestPrefix = -1;
+
+        foreach (var r in staticRoutes)
+        {
+            if (r == null) continue;
+            if (!TryParseIPv4(r.network, out uint net)) continue;
+            if (!TryParseIPv4(r.subnetMask, out uint mask)) continue;
+
+            if ((dstIp & mask) != (net & mask)) continue;
+
+            int prefix = CountMaskBits(mask);
+            if (prefix > bestPrefix)
+            {
+                bestPrefix = prefix;
+                best = r;
+            }
+        }
+
+        return best;
     }
 
     public bool TryGetBestConnectedInterface(uint dstIp, out RouterInterface best)
